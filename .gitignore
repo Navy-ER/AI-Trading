@@ -50,3 +50,13 @@ agent-orchestrator.yaml
 .ao/
 .serena/
 tasks/
+
+# Python / runtime data (trading bridge)
+__pycache__/
+*.pyc
+*.jsonl
+*.bak
+*.bak.*
+*.old
+monitor_state.json
+nul
