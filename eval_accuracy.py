@@ -37,6 +37,21 @@ def load_signals(path):
                 continue
             if not (entry and tp and sl):
                 continue
+            # Level posisi ASLI (mirror add_position): ATR-based, bukan statis AI.
+            # BUY: tp=entry+1.5*atr, sl=entry-1.0*atr; SELL: kebalikan.
+            atr = s.get("atr")
+            if atr:
+                try:
+                    atr = float(atr)
+                    action = s.get("action", "BUY")
+                    if action == "BUY":
+                        s["take_profit"] = round(entry + 1.5 * atr, 8)
+                        s["stop_loss"] = round(entry - 1.0 * atr, 8)
+                    else:
+                        s["take_profit"] = round(entry - 1.5 * atr, 8)
+                        s["stop_loss"] = round(entry + 1.0 * atr, 8)
+                except (TypeError, ValueError):
+                    pass
             s["entry_price"] = entry
             if s.get("dynamic_tp"):
                 s["dynamic_tp"] = tp

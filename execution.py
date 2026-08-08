@@ -160,6 +160,54 @@ def compute_tp_sl(entry_price: float, action: str) -> tuple[float, float]:
     return tp, sl
 
 
+def place_stop_loss(exchange, symbol: str, position_side: str, qty: float, sl_price: float):
+    """
+    Place exchange-side stop-limit order that protects the position even when
+    the bridge/PC is offline. Returns order id (str) or None on failure.
+    position_side: 'BUY'/'SELL' (the OPEN side). SL order is the opposite side.
+    """
+    try:
+        sl_side = "sell" if position_side == "BUY" else "buy"
+        # Limit price: slight buffer beyond trigger so fill is likely once triggered.
+        limit_price = sl_price * (0.995 if sl_side == "sell" else 1.005)
+        limit_price = parse_price_precision(symbol, limit_price)
+        qty = parse_quantity_precision(symbol, qty)
+        order = exchange.create_order(
+            symbol=symbol,
+            type="STOP_LOSS_LIMIT",
+            side=sl_side,
+            amount=qty,
+            price=limit_price,
+            params={"stopPrice": sl_price},
+        )
+        oid = order.get("id")
+        log(f"[EXEC-SL] {sl_side} stop-loss {symbol} qty={qty:.6f} trigger={sl_price} limit={limit_price} id={oid}")
+        return oid
+    except ccxt.InvalidOrder as e:
+        log(f"[EXEC-SL] Invalid order {symbol}: {e}")
+    except ccxt.NetworkError as e:
+        log(f"[EXEC-SL] Network error {symbol}: {e}")
+    except ccxt.ExchangeError as e:
+        log(f"[EXEC-SL] Exchange error {symbol}: {e}")
+    except Exception as e:
+        log(f"[EXEC-SL] Unknown error {symbol}: {e}")
+    return None
+
+
+def cancel_exchange_order(exchange, symbol: str, order_id) -> bool:
+    """Cancel an exchange order (e.g. orphaned SL when position closed by TP/bridge)."""
+    if not order_id:
+        return False
+    try:
+        exchange.cancel_order(order_id, symbol)
+        log(f"[EXEC-CANCEL] Cancelled {order_id} {symbol}")
+        return True
+    except Exception as e:
+        log(f"[EXEC-CANCEL] Cancel failed {order_id}: {e}")
+        return False
+
+
+
 def estimate_position_size(base_price: float) -> float:
     """Fixed-size order clamped by min/max env vars."""
     raw = float(os.getenv("TKO_MIN_ORDER_USDT", "1.20"))

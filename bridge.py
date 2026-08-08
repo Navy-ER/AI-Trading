@@ -22,6 +22,9 @@ STALE_POSITION_HOURS = 24
 SIGNALS_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signals.jsonl")
 TRADES_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades.jsonl")
 OPEN_POS_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "open_positions.jsonl")
+CIRCUIT_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "circuit_state.json")
+DAILY_LOSS_LIMIT = float(os.getenv("TKO_DAILY_LOSS_LIMIT", "2.40"))  # 2x ukuran posisi (min order 1.20 USDT)
+CIRCUIT_DISABLED = os.getenv("TKO_CIRCUIT_DISABLED", "0") == "1"
 EVAL_HOURS = 1
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -60,6 +63,46 @@ def read_jsonl(path):
                     except json.JSONDecodeError:
                         pass
     return items
+
+# ── Daily loss circuit breaker (P1) ─────────────────────────────────────
+def circuit_state():
+    """Persisted per-day realised loss + paused flag. Reset otomatis saat tanggal ganti."""
+    st = {"date": datetime.now().strftime("%Y-%m-%d"), "realised_loss": 0.0, "paused": False}
+    if os.path.exists(CIRCUIT_STATE):
+        try:
+            st.update(json.load(open(CIRCUIT_STATE, encoding="utf-8")))
+        except Exception:
+            pass
+    if st.get("date") != datetime.now().strftime("%Y-%m-%d"):
+        st = {"date": datetime.now().strftime("%Y-%m-%d"), "realised_loss": 0.0, "paused": False}
+    return st
+
+def circuit_paused():
+    if CIRCUIT_DISABLED:
+        return False
+    return circuit_state().get("paused", False)
+
+def record_realised_loss(pnl):
+    """Accumulate realised loss hari ini; pause trading kalau lewat limit."""
+    if pnl >= 0:
+        return
+    st = circuit_state()
+    st["realised_loss"] = round(st.get("realised_loss", 0.0) - pnl, 4)
+    if not st.get("paused") and st["realised_loss"] >= DAILY_LOSS_LIMIT:
+        st["paused"] = True
+        log(f"[CIRCUIT] Daily realised loss {st['realised_loss']:.4f} USDT >= limit {DAILY_LOSS_LIMIT} "
+            f"→ TRADING PAUSED until daily reset")
+        send_discord_webhook(DISCORD_HEALTH_WEBHOOK, {
+            "title": "🔴 Circuit Breaker: Trading Paused",
+            "color": 0xFF0000,
+            "fields": [
+                {"name": "Daily Realised Loss", "value": f"-{st['realised_loss']:.4f} USDT", "inline": True},
+                {"name": "Limit", "value": f"{DAILY_LOSS_LIMIT} USDT", "inline": True},
+                {"name": "Resume", "value": "Otomatis besok (reset harian)", "inline": False},
+            ],
+        })
+    with open(CIRCUIT_STATE, "w", encoding="utf-8") as f:
+        json.dump(st, f)
 
 # ── Market Data ──────────────────────────────────────────────────────────
 def get_price_range(symbol, since_ts):
@@ -648,6 +691,24 @@ def check_open_positions(prices):
             pos["pnl_usdt"] = round(pnl, 4)
             pos["closed_at"] = datetime.now().isoformat()
             closed.append(pos)
+            # LIVE: tutup posisi di exchange + cancel SL order (cegah double execution)
+            if not TKO_DRY_RUN:
+                ex = tko_exec.get_exchange()
+                sl_id = pos.get("sl_order_id")
+                close_side = "SELL" if pos["action"] == "BUY" else "BUY"
+                sl_hit = (pos["result"] == "LOSS" and sl_id) or (
+                    pos["result"] == "WIN" and sl_id and current_price <= float(pos["sl"]) and pos["action"] == "BUY") or (
+                    pos["result"] == "WIN" and sl_id and current_price >= float(pos["sl"]) and pos["action"] == "SELL")
+                if ex is not None:
+                    if sl_hit:
+                        # SL exchange sudah/akan nutup posisi — cancel order SL yg tersisa,
+                        # JANGAN pasang close order (hindari double execution)
+                        tko_exec.cancel_exchange_order(ex, f"{asset.replace('USDT', '')}/USDT", sl_id)
+                        log(f"[EXEC] {asset} closed via exchange SL order, skip close order")
+                    else:
+                        # TP/trailing hit: SL order harus di-cancel dulu, baru close real
+                        tko_exec.cancel_exchange_order(ex, f"{asset.replace('USDT', '')}/USDT", sl_id)
+                        tko_exec.execute_trade(close_side, asset, pos.get("size_usdt", 1.2), current_price)
             log(f"[CLOSE] {asset} {pos['result']} @ {current_price} | PnL={pnl:+.4f} USDT (~Rp {idr(pnl)})")
             send_discord_webhook(DISCORD_WEBHOOK_TRADE_URL, {
                 "title": "Position Closed: " + asset,
@@ -683,6 +744,7 @@ def check_open_positions(prices):
             "size_usdt": c.get("size_usdt", 0),
             "status": "CLOSED",
         })
+        record_realised_loss(c.get("pnl_usdt", 0.0))
 
     return len(still_open), round(total_floating, 4)
 
@@ -720,6 +782,14 @@ def add_position(signal, price, size_usdt=None):
         "size_usdt": size_usdt,
         "confidence": signal.get("confidence", "N/A"),
     }
+    # LIVE: place exchange-side stop-loss agar posisi tetap terlindungi saat PC/bridge mati
+    if not TKO_DRY_RUN:
+        ex = tko_exec.get_exchange()
+        if ex is not None:
+            sl_qty = size_usdt / price
+            sl_id = tko_exec.place_stop_loss(ex, f"{signal['asset'].replace('USDT', '')}/USDT",
+                                             signal["action"], sl_qty, sl)
+            pos["sl_order_id"] = sl_id
     append_jsonl(OPEN_POS_LOG, pos)
     log(f"[POS] Opened {signal['action']} {signal['asset']} @ {price} | TP={tp} SL={sl}")
 
@@ -892,6 +962,11 @@ def main_loop():
     # Max positions guard — stop taking new trades if full
     if open_count >= MAX_OPEN_POSITIONS:
         log(f"[GUARD] Max positions ({MAX_OPEN_POSITIONS}) reached, skip cycle")
+        return
+
+    # Circuit breaker — daily realised loss limit reached, no new trades until reset
+    if circuit_paused():
+        log("[CIRCUIT] Daily loss limit reached — trading paused until daily reset")
         return
 
     if main_loop._counter % 5 == 0:
