@@ -1,4 +1,4 @@
-import requests, json, re, time, os, schedule, random
+import requests, json, re, time, os, schedule
 from pathlib import Path
 from datetime import datetime
 import execution as tko_exec
@@ -26,6 +26,8 @@ CIRCUIT_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "circui
 DAILY_LOSS_LIMIT = float(os.getenv("TKO_DAILY_LOSS_LIMIT", "2.40"))  # 2x ukuran posisi (min order 1.20 USDT)
 CIRCUIT_DISABLED = os.getenv("TKO_CIRCUIT_DISABLED", "0") == "1"
 EVAL_HOURS = 1
+TREND_MIN_ADX = float(os.getenv("TKO_TREND_MIN_ADX", "25"))  # ADX >= ini + arah +DI/-DI melawan posisi = skip (anti fade pump)
+LOSS_COOLDOWN_HOURS = float(os.getenv("TKO_LOSS_COOLDOWN_HOURS", "6"))  # per-coin cooldown setelah CLOSE loss (jam)
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 USDT_TO_IDR = 16000  # patokan kurs: 1 USDT = Rp 16.000
@@ -176,6 +178,47 @@ def get_rsi(symbol, period=14):
     except Exception:
         return None
 
+
+def _adx_components(klines, period=14):
+    """Wilder ADX dari klines. Return (adx, plus_di_sum, minus_di_sum) atau (None, None, None)."""
+    if len(klines) < period + 20:
+        return None, None, None
+    highs = [float(k[2]) for k in klines]
+    lows = [float(k[3]) for k in klines]
+    closes = [float(k[4]) for k in klines]
+    tr = [0.0]
+    for i in range(1, len(klines)):
+        tr.append(max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        ))
+    atr = [0.0] * (period) + [sum(tr[i - period + 1:i + 1]) / period for i in range(period, len(tr))]
+    plus_dm = [0.0] * len(tr)
+    minus_dm = [0.0] * len(tr)
+    for i in range(1, len(tr)):
+        up = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        plus_dm[i] = up if up > down and up > 0 else 0.0
+        minus_dm[i] = down if down > up and down > 0 else 0.0
+    plus_di = [0.0] * len(tr)
+    minus_di = [0.0] * len(tr)
+    for i in range(period, len(tr)):
+        atr_i = atr[i]
+        if atr_i == 0:
+            continue
+        plus_di[i] = 100 * sum(plus_dm[i - period + 1:i + 1]) / atr_i
+        minus_di[i] = 100 * sum(minus_dm[i - period + 1:i + 1]) / atr_i
+    dx = [0.0] * len(tr)
+    for i in range(period, len(tr)):
+        pdi = plus_di[i]
+        mdi = minus_di[i]
+        if pdi + mdi == 0:
+            continue
+        dx[i] = 100 * abs(pdi - mdi) / (pdi + mdi)
+    adx = sum(dx[-period:]) / period if dx else 0.0
+    return round(adx, 1), sum(plus_di[-period:]), sum(minus_di[-period:])
+
 def get_adx(symbol, period=14):
     """Compute ADX from 1h klines. Returns None on error."""
     try:
@@ -185,44 +228,24 @@ def get_adx(symbol, period=14):
         if r.status_code == 400:
             return None
         r.raise_for_status()
-        klines = r.json()
-        if len(klines) < period + 20:
+        adx, _, _ = _adx_components(r.json(), period)
+        return adx
+    except Exception:
+        return None
+
+def get_trend_dir(symbol, period=14):
+    """Arah tren dari +DI vs -DI (1h klines). Return 'UP'/'DOWN'/None (error/equal)."""
+    try:
+        url = "https://data-api.binance.vision/api/v3/klines"
+        params = {"symbol": symbol, "interval": "1h", "limit": period + 20}
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 400:
             return None
-        highs = [float(k[2]) for k in klines]
-        lows = [float(k[3]) for k in klines]
-        closes = [float(k[4]) for k in klines]
-        tr = [0.0]
-        for i in range(1, len(klines)):
-            tr.append(max(
-                highs[i] - lows[i],
-                abs(highs[i] - closes[i - 1]),
-                abs(lows[i] - closes[i - 1]),
-            ))
-        atr = [0.0] * (period) + [sum(tr[i - period + 1:i + 1]) / period for i in range(period, len(tr))]
-        plus_dm = [0.0] * len(tr)
-        minus_dm = [0.0] * len(tr)
-        for i in range(1, len(tr)):
-            up = highs[i] - highs[i - 1]
-            down = lows[i - 1] - lows[i]
-            plus_dm[i] = up if up > down and up > 0 else 0.0
-            minus_dm[i] = down if down > up and down > 0 else 0.0
-        plus_di = [0.0] * len(tr)
-        minus_di = [0.0] * len(tr)
-        for i in range(period, len(tr)):
-            atr_i = atr[i]
-            if atr_i == 0:
-                continue
-            plus_di[i] = 100 * sum(plus_dm[i - period + 1:i + 1]) / atr_i
-            minus_di[i] = 100 * sum(minus_dm[i - period + 1:i + 1]) / atr_i
-        dx = [0.0] * len(tr)
-        for i in range(period, len(tr)):
-            pdi = plus_di[i]
-            mdi = minus_di[i]
-            if pdi + mdi == 0:
-                continue
-            dx[i] = 100 * abs(pdi - mdi) / (pdi + mdi)
-        adx = sum(dx[-period:]) / period if dx else 0.0
-        return round(adx, 1)
+        r.raise_for_status()
+        _, pdi, mdi = _adx_components(r.json(), period)
+        if pdi is None or pdi == mdi:
+            return None
+        return "UP" if pdi > mdi else "DOWN"
     except Exception:
         return None
 
@@ -935,6 +958,53 @@ def get_open_assets():
     positions = read_jsonl(OPEN_POS_LOG)
     return list({p.get("asset") for p in positions if p.get("asset")})
 
+
+def loss_cooldown_active(asset):
+    """True jika asset terakhir CLOSE loss dalam LOSS_COOLDOWN_HOURS (anti re-entry coin yg baru SL hit)."""
+    if LOSS_COOLDOWN_HOURS <= 0:
+        return False
+    cutoff = time.time() - LOSS_COOLDOWN_HOURS * 3600
+    for t in reversed(read_jsonl(TRADES_LOG)):
+        if t.get("asset") != asset or t.get("status") != "CLOSED":
+            continue
+        try:
+            closed_ts = datetime.fromisoformat(t.get("closed_at", "")).timestamp()
+        except Exception:
+            closed_ts = float(t.get("timestamp_epoch") or 0)
+        if closed_ts and closed_ts < cutoff:
+            break
+        pnl = t.get("pnl_usdt")
+        if pnl is not None and pnl < 0:
+            return True
+    return False
+
+
+def _filter_signal(signal, adx_indicators, rsi_indicators, prices):
+    """Filter signal by ADX strength and RSI alignment. Return signal if passes, None if rejected."""
+    asset = signal.get("asset", "")
+    base = asset.replace("USDT", "")
+    action = signal.get("action", "")
+    rsi = rsi_indicators.get(base)
+    adx = adx_indicators.get(base)
+
+    # ADX minimum check (already filtered pre-AI but double-check)
+    ADX_MIN = float(os.getenv("TKO_ADX_MIN", "20"))
+    if adx is not None and adx < ADX_MIN:
+        log(f"[FILTER] {base} ADX {adx:.1f} < {ADX_MIN} (weak trend), reject")
+        return None
+
+    # RSI alignment check
+    if rsi is not None:
+        if action == "BUY" and rsi > 55:
+            log(f"[FILTER] {base} BUY but RSI {rsi:.1f} > 55 (overbought), reject")
+            return None
+        if action == "SELL" and rsi < 45:
+            log(f"[FILTER] {base} SELL but RSI {rsi:.1f} < 45 (oversold), reject")
+            return None
+
+    return signal
+
+
 def main_loop():
     global _down_alerted
     main_loop._counter = getattr(main_loop, "_counter", 0) + 1
@@ -998,25 +1068,13 @@ def main_loop():
         log(f"[ADX] Weak trend (ADX<{ADX_MIN}): {', '.join(sorted(weak_adx)[:10])}")
     signal = get_ai_signal(market_data, rsi_indicators, adx_indicators, last_asset, excluded)
     if not signal:
-        # Forced fallback: pick random valid asset to avoid idle cycles
-        candidates = [b for b in market_data if b not in excluded]
-        if candidates:
-            base = random.choice(candidates)
-            price = prices[base]
-            action = random.choice(["BUY", "SELL"])
-            log(f"[FALLBACK] Random pick {base} {action} @ {price:.6f}")
-            signal = {
-                "action": action,
-                "asset": f"{base}USDT",
-                "entry_zone": round(price, 6),
-                "take_profit": round(price * 1.015, 6),
-                "stop_loss": round(price * 0.985, 6),
-                "confidence": "40%",
-                "reason": "forced fallback"
-            }
-        else:
-            log("[BRIDGE] No valid candidates, skip cycle")
-            return
+        # No AI signal — skip cycle (no random fallback = no coinflip)
+        log("[AI] No valid signal from AI, skip cycle")
+        return
+    signal = _filter_signal(signal, adx_indicators, rsi_indicators, prices)
+    if not signal:
+        log("[FILTER] Signal rejected by ADX/RSI filter, skip cycle")
+        return
 
     asset = signal["asset"]
     base = asset.replace("USDT", "")
@@ -1038,25 +1096,9 @@ def main_loop():
         log(f"[GUARD] {asset} sudah ada posisi terbuka, retry {1 + _retry}/{max_retries}")
         signal = get_ai_signal(market_data, rsi_indicators, adx_indicators, last_asset, excluded)
         if not signal:
-            # Fallback on retry failure too
-            candidates = [b for b in prices if b not in excluded]
-            if candidates:
-                base = random.choice(candidates)
-                price = prices[base]
-                action = random.choice(["BUY", "SELL"])
-                log(f"[FALLBACK] Retry random pick {base} {action} @ {price:.6f}")
-                signal = {
-                    "action": action,
-                    "asset": f"{base}USDT",
-                    "entry_zone": round(price, 6),
-                    "take_profit": round(price * 1.015, 6),
-                    "stop_loss": round(price * 0.985, 6),
-                    "confidence": "40%",
-                    "reason": "forced fallback"
-                }
-            else:
-                log("[BRIDGE] No valid candidates after retries, skip")
-                return
+                    # Retry AI failed — skip cycle (no random fallback = no coinflip)
+                    log("[AI] Retry failed, no valid signal, skip cycle")
+                    return
         asset = signal["asset"]
 
     # Retry loop may have picked a different asset — recompute base/price/adx

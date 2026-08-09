@@ -13,6 +13,8 @@ TRADES = os.path.join(BASE, "trades.jsonl")
 OPENS = os.path.join(BASE, "open_positions.jsonl")
 STATE = os.path.join(BASE, "monitor_state.json")
 LOG = r"E:\Project AI\monitoring.log"
+PYTHON = r"C:\Users\reyvan\AppData\Local\Python\pythoncore-3.14-64\python.exe"  # same as monitor_cron.sh
+BRIDGE_PY = os.path.join(BASE, "bridge.py")
 WEBHOOK_URL = "https://discord.com/api/webhooks/1533282533264064552/BxCca57xNw2vzG-XlUmlUForDY5DeRybLEzkPYoUOMisvS7NbeAS135xR3e9VVT_LIRA"
 
 GREEN, BLUE, RED = 0x2ECC71, 0x3498DB, 0xE74C3C
@@ -53,6 +55,24 @@ def bridge_alive():
         return None  # unknown
 
 
+def restart_bridge():
+    """Start bridge.py detached (positions persist in open_positions.jsonl)."""
+    try:
+        flags = 0
+        if os.name == "nt":
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        out = open(os.path.join(BASE, "bridge_restart.log"), "a", encoding="utf-8")
+        proc = subprocess.Popen(
+            [PYTHON, BRIDGE_PY], cwd=BASE, stdout=out, stderr=subprocess.STDOUT,
+            creationflags=flags)
+        with open(os.path.join(BASE, "bridge_restart.log"), "a", encoding="utf-8") as f:
+            f.write("[%s] restart pid=%s\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), proc.pid))
+        return proc.pid
+    except Exception as e:
+        print("[RESTART] Error: %s" % e)
+        return None
+
+
 def closed_stats():
     w = l = 0
     net = 0.0
@@ -64,6 +84,8 @@ def closed_stats():
         t = json.loads(line)
         if t.get("status") == "CLOSED":
             p = t.get("pnl_usdt", 0.0)
+            if t.get("corrupt") or abs(p) > 0.5:  # glitch price trades (size 1.2 -> |pnl| > 0.5 mustahil)
+                continue
             net += p
             if p > 0:
                 w += 1
@@ -136,7 +158,17 @@ def main():
     elif alive:
         msgs.append("bridge: RUNNING")
     else:
-        msgs.append("bridge: DOWN!!")
+        # P1: bridge DOWN -> auto-restart (positions persist in open_positions.jsonl)
+        pid = restart_bridge()
+        if pid:
+            alive = True
+            msgs.append("bridge: DOWN -> AUTO-RESTARTED (pid %s)" % pid)
+            send_embed(make_embed("🔄 Bridge DOWN → Auto-Restarted", RED,
+                                  [{"name": "PID", "value": str(pid), "inline": True},
+                                   {"name": "Open", "value": "%d pos (float %+.4f)" % (n, fsum), "inline": True}],
+                                  "bridge.py di-restart otomatis. Posisi persist di open_positions.jsonl."))
+        else:
+            msgs.append("bridge: DOWN!! (restart gagal)")
     msgs.append("%d closed %dW/%dL %.1f%% net %+.4f USDT" % (total, w, l, wr, net))
     msgs.append("%d open floating %+.4f USDT" % (n, fsum))
     if new_closes > 0:

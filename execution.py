@@ -17,6 +17,11 @@ TOKOCRYPTO_API_KEY = os.getenv("TOKOCRYPTO_API_KEY", "")
 TOKOCRYPTO_SECRET_KEY = os.getenv("TOKOCRYPTO_SECRET_KEY", "")
 TKO_MIN_ORDER_USDT = float(os.getenv("TKO_MIN_ORDER_USDT", "1.20"))
 TKO_MAX_POSITION_USDT = float(os.getenv("TKO_MAX_POSITION_USDT", "5.00"))
+TKO_SIZE_LOW = float(os.getenv("TKO_SIZE_LOW", "1.20"))   # confidence < MED
+TKO_SIZE_MED = float(os.getenv("TKO_SIZE_MED", "2.00"))   # MED <= conf < HIGH
+TKO_SIZE_HIGH = float(os.getenv("TKO_SIZE_HIGH", "3.00")) # conf >= HIGH
+TKO_CONFIDENCE_HIGH_TH = float(os.getenv("TKO_CONFIDENCE_HIGH_TH", "80"))
+TKO_CONFIDENCE_MED_TH = float(os.getenv("TKO_CONFIDENCE_MED_TH", "60"))
 TKO_SL_PCT = float(os.getenv("TKO_SL_PCT", "1.5"))
 TKO_TP_PCT = float(os.getenv("TKO_TP_PCT", "3"))
 
@@ -208,7 +213,19 @@ def cancel_exchange_order(exchange, symbol: str, order_id) -> bool:
 
 
 
-def estimate_position_size(base_price: float) -> float:
-    """Fixed-size order clamped by min/max env vars."""
+
+def estimate_position_size(price: float, confidence_pct: int = 0) -> float:
+    """Confidence-tier sizing. LOW conf = min, MED = medium, HIGH = high. Clamped env min/max."""
+    if confidence_pct >= TKO_CONFIDENCE_HIGH_TH:
+        raw = TKO_SIZE_HIGH
+    elif confidence_pct >= TKO_CONFIDENCE_MED_TH:
+        raw = TKO_SIZE_MED
+    else:
+        raw = TKO_SIZE_LOW
+    return min(max(raw, TKO_MIN_ORDER_USDT), TKO_MAX_POSITION_USDT)
+
+
+# Back-compat alias without confidence defaults to TKO_MIN_ORDER_USDT (old caller safe)
+def estimate_legacy_size(price: float) -> float:
     raw = float(os.getenv("TKO_MIN_ORDER_USDT", "1.20"))
     return min(raw, TKO_MAX_POSITION_USDT)

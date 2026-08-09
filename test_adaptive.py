@@ -4,7 +4,7 @@ sys.path.insert(0, "C:/Users/reyvan/pixel-agents")
 import bridge
 
 bridge.append_jsonl = lambda *a, **k: None
-bridge.tko_exec.estimate_position_size = lambda price: 1.2
+bridge.tko_exec.estimate_position_size = lambda price, conf=0: 1.2
 
 fails = 0
 
