@@ -1,0 +1,55 @@
+services:
+  - type: worker
+    name: bridge-trading-bot
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bridge.py"
+    envVars:
+      - key: OMNIROUTER_URL
+        value: "https://openrouter.ai/api/v1/chat/completions"
+        sync: false
+      - key: OMNIROUTER_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: "gratis-3"
+      - key: TKO_DRY_RUN
+        value: "true"
+      - key: TKO_MIN_ORDER_USDT
+        value: "1.20"
+      - key: TKO_CONFIDENCE_MIN
+        value: "80"
+      - key: TKO_MAX_POSITIONS
+        value: "5"
+      - key: TKO_TP_PCT
+        value: "3"
+      - key: TKO_SL_PCT
+        value: "1.5"
+      - key: TKO_MAX_SLOTS
+        value: "5"
+      - key: TKO_ADX_MIN
+        value: "20"
+      - key: TKO_TREND_MIN_ADX
+        value: "25"
+      - key: TKO_LOSS_COOLDOWN_HOURS
+        value: "6"
+      - key: TKO_MAX_POSITION_USDT
+        value: "5.00"
+      - key: TKO_SIZE_LOW
+        value: "1.20"
+      - key: TKO_SIZE_MED
+        value: "2.00"
+      - key: TKO_SIZE_HIGH
+        value: "3.00"
+      - key: TKO_CONFIDENCE_HIGH_TH
+        value: "80"
+      - key: TKO_CONFIDENCE_MED_TH
+        value: "60"
+      - key: DISCORD_HEALTH_WEBHOOK_URL
+        sync: false
+      - key: DISCORD_TRADE_WEBHOOK_URL
+        sync: false
+      - key: TOKOCRYPTO_API_KEY
+        sync: false
+      - key: TOKOCRYPTO_SECRET_KEY
+        sync: false
+    autoDeploy: true
