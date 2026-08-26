@@ -1,0 +1,76 @@
+# Compiled output
+out
+dist
+node_modules
+*.tsbuildinfo
+
+# Logs
+/logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode-test/
+/.idea
+
+# E2E test artifacts
+test-results/
+playwright-report/
+allure-results/
+allure-report/
+
+# Build artifacts
+*.vsix
+*.map
+
+# Environment files
+.env*
+!.env.example
+
+# Project-specific
+.claude
+.mcp.json
+/sprites-export
+.vercel/
+agent-orchestrator.yaml
+.worktrees
+
+# Local notes (not for commit)
+/notes/
+/docs/e2e-*.md
+!/docs/e2e-claude-mocking.md
+
+.playwright-mcp/
+
+# Agent-orchestrator / tooling scaffolding
+.ao/
+.serena/
+tasks/
+
+# Python / runtimedata (trading bridge)
+__pycache__/
+*.pyc
+*.jsonl
+*.bak
+*.bak.*
+*.old
+monitor_state.json
+nul
+
+# Virtual env (project-level)
+.venv/
+
+# OmniRouter local data (API keys, DB)
+.omniroute/
+
+# Bridge backup/corrupt artifacts
+bridge.py.backup_bad
+bridge.py.bak
+bridge.py.corrupt_stripped
+bridge-monitor-workflow*.json
+exported.json
+health.py
