@@ -50,26 +50,27 @@ def log(msg):
     try:
         if os.path.exists(BRIDGE_LOG) and os.path.getsize(BRIDGE_LOG) > LOG_MAX_BYTES:
             os.replace(BRIDGE_LOG, BRIDGE_LOG + ".bak")
-        with open(BRIDGE_LOG, "a") as f:
+        with open(BRIDGE_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{ts}] {msg}\n")
     except OSError:
         pass
 
 def append_jsonl(path, obj):
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(obj, default=str) + "\n")
 
 def read_jsonl(path):
     items = []
-    if os.path.exists(path):
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        items.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
+    if not os.path.exists(path):
+        return items
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    items.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
     return items
 
 # Daily loss circuit breaker
@@ -92,13 +93,13 @@ def circuit_paused():
 
 def record_realised_loss(pnl):
     """Accumulate realised loss hari ini; pause trading kalau lewat limit."""
-    if pnl >= 0:
+    if pnl <= 0:
         return
     st = circuit_state()
     st["realised_loss"] = round(st.get("realised_loss", 0.0) + abs(pnl), 4)
-    if not st.get("paused") and st["realised_loss"] >= DAILY_LOSS_LIMIT:
+    if not st.get("paused") and st["realised_loss"] > DAILY_LOSS_LIMIT:
         st["paused"] = True
-        log(f"[CIRCUIT] Daily realised loss {st['realised_loss']:.4f} USDT limit {DAILY_LOSS_LIMIT} USDT -> TRADING PAUSED until daily reset")
+        log(f"[CIRCUIT] Daily realised loss {st['realised_loss']:.4f} USDT > limit {DAILY_LOSS_LIMIT} USDT — TRADING PAUSED until daily reset")
         send_discord_webhook(DISCORD_HEALTH_WEBHOOK, {
             "title": "Circuit Breaker: Trading Paused",
             "color": 0xFF0000,
@@ -184,13 +185,13 @@ def get_rsi(symbol, period=14):
         return None
 
 def _adx_components(klines, period=14):
-    """Wilder ADX dari klines. Return (adx, plus_di_sum, minus_di_sum) or (None, None, None)."""
+    """Wilder ADX from klines. Return (adx, plus_di_sum, minus_di_sum) or (None, None, None)."""
     if len(klines) < period + 20:
         return None, None, None
     highs = [float(k[2]) for k in klines]
     lows = [float(k[3]) for k in klines]
     closes = [float(k[4]) for k in klines]
-    
+
     tr = [0.0]
     for i in range(1, len(klines)):
         tr.append(max(
@@ -198,27 +199,30 @@ def _adx_components(klines, period=14):
             abs(highs[i] - closes[i - 1]),
             abs(lows[i] - closes[i - 1]),
         ))
-    
-    atr = [0.0] * period + [sum(tr[i - period + 1:i + 1]) / period for i in range(period, len(tr))]
+
+    atr = [0.0] * len(tr)
+    for i in range(period, len(tr)):
+        atr[i] = sum(tr[i - period + 1:i + 1]) / period
+
     plus_dm = [0.0] * len(tr)
     minus_dm = [0.0] * len(tr)
-    
+
     for i in range(1, len(tr)):
         up = highs[i] - highs[i - 1]
         down = lows[i - 1] - lows[i]
-        plus_dm[i] = up if up > down and up > 0 else 0.0
-        minus_dm[i] = down if down > up and down > 0 else 0.0
-    
+        plus_dm[i] = up if down > 0 else 0.0
+        minus_dm[i] = down if down > 0 else 0.0
+
     plus_di = [0.0] * len(tr)
     minus_di = [0.0] * len(tr)
-    
+
     for i in range(period, len(tr)):
         atr_i = atr[i]
         if atr_i == 0:
             continue
         plus_di[i] = 100 * sum(plus_dm[i - period + 1:i + 1]) / atr_i
         minus_di[i] = 100 * sum(minus_dm[i - period + 1:i + 1]) / atr_i
-    
+
     dx = [0.0] * len(tr)
     for i in range(period, len(tr)):
         pdi = plus_di[i]
@@ -226,7 +230,7 @@ def _adx_components(klines, period=14):
         if pdi + mdi == 0:
             continue
         dx[i] = 100 * abs(pdi - mdi) / (pdi + mdi)
-    
+
     adx = sum(dx[-period:]) / period if len(dx) >= period else 0.0
     return round(adx, 1), sum(plus_di[-period:]), sum(minus_di[-period:])
 
@@ -269,12 +273,12 @@ def get_batch_rsi(assets):
         return base, get_rsi(sym)
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(_rsi, b): b for b in assets}
-        for f in concurrent.futures.as_completed(futures, timeout=12):
-            try:
-                base, rsi = f.result()
-                result[base] = rsi
-            except Exception:
-                pass
+    for f in concurrent.futures.as_completed(futures, timeout=12):
+        try:
+            base, rsi = f.result()
+            result[base] = rsi
+        except Exception:
+            pass
     return result
 
 def get_market_data():
@@ -316,12 +320,12 @@ def get_batch_adx(assets):
         return base, get_adx(sym)
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         futures = {ex.submit(_adx, b): b for b in assets}
-        for f in concurrent.futures.as_completed(futures, timeout=15):
-            try:
-                base, adx = f.result()
-                result[base] = adx
-            except Exception:
-                pass
+    for f in concurrent.futures.as_completed(futures, timeout=15):
+        try:
+            base, adx = f.result()
+            result[base] = adx
+        except Exception:
+            pass
     return result
 
 def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excluded_assets=None):
@@ -329,7 +333,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
         rsi_data = rsi_data or {}
         adx_data = adx_data or {}
 
-        # Batasi maksimal 5 koin teratas (by volume) untuk prompt ultra-singkat
+        # Limit to max 5 top coins (by volume) for ultra-short prompt
         top_coins = list(market_data.items())[:5]
 
         lines = []
@@ -338,7 +342,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             vol = data.get('volume_24h', 0) / 1e6
             rsi = rsi_data.get(coin)
             adx = adx_data.get(coin)
-            # Format ultra-singkat: XRP:1.42 Chg=+1.4% Vol=243M RSI=24.7 ADX=22
+            # Ultra-short format: XRP:1.42 Chg=+1.4% Vol=243M RSI=24.7 ADX=22
             parts = [f"{coin}:{data['price']:.4g}"]
             parts.append(f"Chg={change:+.1f}%")
             parts.append(f"Vol={vol:.0f}M")
@@ -351,12 +355,14 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
         excluded_line = ""
         if excluded_assets:
             excluded_str = ", ".join(excluded_assets)
-            excluded_line = f"- ASET SUDAH PUNYA POSISI: {excluded_str}. DILARANG keras memilih aset yang ada list ini. Jika memilihnya, sinyal akan dianggap INVALID.\n- WAJIB pilih koin LAIN yang tidak ada list ASET SUDAH PUNYA POSISI.\n"
+            excluded_line = f"- ASET SUDAH PUNYA POSISI: {excluded_str}. DILARANG memilih aset yang ada list ini. Jika memilihnya, sinyal akan dianggap INVALID.\n- WAJIB pilih koin LAIN yang tidak ada list ASET SUDAH PUNYA POSISI.\n"
 
         market_text = "\n".join(lines)
-        prompt = f"""Pilih SATU koin HANYA dari daftar data pasar di bawah untuk BUY/SELL. DILARANG memilih BTC, ETH, SOL, UNI, ADA, EUL, GIGGLE, atau stablecoin. DILARANG memilih koin yang sama berturut-turut (Terakhir: {last_asset}).
-                {excluded_line}{market_text}
-                Balas HANYA dengan JSON murni tanpa markdown: {{"coin":"SYMBOL", "action":"BUY/SELL", "confidence":"XX%", "reason":"alasan"}}"""
+        prompt = f"""Pilih SATU koin HANYA dari daftar data pasar bawah untuk BUY atau SELL.
+DILARANG KERAS memilih BTC, ETH, SOL, UNI, ADA, EUL, GIGGLE, atau stablecoin.
+HANYA koin yang ada list bawah ini yang valid.
+{excluded_line}{market_text}
+Balas HANYA dengan JSON murni tanpa markdown: {{"coin":"SYMBOL", "action":"BUY/SELL", "confidence":80, "reason":"alasan singkat"}}"""
 
         url = OMNIROUTER_URL
         omni_api_key = os.getenv("OMNIROUTER_API_KEY", "")
@@ -386,7 +392,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
                 log(f"[AI] No valid signal extracted on attempt {attempt + 1}: {raw_content[:200] if raw_content else 'unknown'}")
                 continue
 
-            # New format uses 'coin' key, confidence as int
+            # New format uses 'coin' key, confidence int
             coin = sig.get("coin") or sig.get("asset", "")
             base = _normalize_base(coin)
             if not base:
@@ -403,18 +409,18 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
                 continue
 
             if base == last_asset and last_asset:
-                log(f"[AI] {{base}} sama dengan sinyal terakhir, retry rotasi")
+                log(f"[AI] {base} sama dengan sinyal terakhir, retry rotasi")
                 continue
 
             if excluded_assets and base in excluded_assets:
-                log(f"[AI] {{base}} ada di excluded (posisi terbuka/terakhir), retry rotasi")
+                log(f"[AI] {base} ada excluded (posisi terbuka/terakhir) retry rotasi")
                 continue
 
-            # Convert to old format for compatibility
-            sig["asset"] = f"{{base}}USDT"
-            sig["confidence"] = f"{{confidence}}%"
+            # Convert old format for compatibility
+            sig["asset"] = f"{base}USDT"
+            sig["confidence"] = f"{confidence}%"
 
-            # handle typo entry_zoe
+            # Handle typo entry_zoe
             if "entry_zone" not in sig and "entry_zoe" in sig:
                 sig["entry_zone"] = sig.pop("entry_zoe")
 
@@ -422,15 +428,15 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
 
         return None
     except Exception as e:
-        log(f"[AI] Error: {{e}}")
+        log(f"[AI] Error: {e}")
         return None
 
 def _normalize_base(asset):
-    """MUB-USDT / DOGEUSD / bnb123 / SOLX1024 -> MUB / DOGE / BNB / SOLX. Return '' jika tak layak."""
+    """MUB-USDT / DOGEUSD / bnb123 / SOLX1024 -> MUB / DOGE / BNB / SOLX. Return "" if not viable."""
     a = "".join(c for c in str(asset).upper() if c.isalnum())
     for suffix in ("USDT", "USD"):
         if a.endswith(suffix) and len(a) > len(suffix):
-            a = a[: -len(suffix)]
+            a = a[:-len(suffix)]
             break
     a = re.sub(r"\d+", "", a)
     if a in ("USDT", "USD"):
@@ -467,9 +473,9 @@ def _fuzzy_match(text, targets, max_distance=2):
     return best
 
 def _parse_ai_json(content):
-    """Coba tiap blok {{...}} satu-satu, AMBIL YANG TERAKHIR valid (model suka echo contoh JSON dulu, jawaban asli di blok akhir). Gagal semua: regex fallback per-field. Tambah: fuzzy matching untuk typo action/asset, strict schema validation."""
+    """Coba tiap blok {...} satu-satu, AMBIL YANG TERAKHIR valid (model suka echo contoh JSON dulu, jawaban asli di blok akhir). Gagal semua: regex fallback per-field. Tambah: fuzzy matching untuk typo action/asset, strict schema validation."""
     found = None
-    for block in re.findall(r"\{[^{}]*\}", content):
+    for block in re.findall(r'\{[^{}]*\}', content):
         try:
             s = json.loads(block)
             if isinstance(s, dict) and s.get("action") and s.get("asset"):
@@ -477,7 +483,7 @@ def _parse_ai_json(content):
                 raw_action = str(s.get("action", "")).upper()
                 fuzzy_action = _fuzzy_match(raw_action, ["BUY", "SELL"], max_distance=1)
                 s["action"] = fuzzy_action or raw_action
-                
+
                 raw_asset = str(s.get("asset", "")).upper()
                 base = _normalize_base(raw_asset)
                 if base:
@@ -486,14 +492,16 @@ def _parse_ai_json(content):
                     known_assets = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA", "MUB", "ZEC", "XAU", "HEI", "MIRA", "SNXXB", "SPCXB", "CRCLB", "HFT", "SYN", "BABY", "BANK", "RLUSD", "PAXG", "U"]
                     fuzzy_asset = _fuzzy_match(raw_asset, known_assets, max_distance=2)
                     if fuzzy_asset:
-                        s["asset"] = raw_asset
+                        s["asset"] = fuzzy_asset
+
                 found = s
         except Exception:
             continue
-    
+
     if found:
         return found
-    
+
+    # Regex fallback per-field
     s = {}
     # Fuzzy match action: BUY/SELL dengan toleransi typo
     m = re.search(r'"?action"?\s*[:=]\s*"?([A-Z]+)"?', content, re.I)
@@ -501,35 +509,35 @@ def _parse_ai_json(content):
         raw_action = m.group(1).upper()
         fuzzy_action = _fuzzy_match(raw_action, ["BUY", "SELL"], max_distance=1)
         s["action"] = fuzzy_action or raw_action
-    
+
     # Fuzzy match asset: normalisasi fuzzy jika typo
     m = re.search(r'"?asset"?\s*[:=]\s*"?([A-Z0-9\-_]+)"?', content, re.I)
     if m:
         raw_asset = m.group(1).upper()
         base = _normalize_base(raw_asset)
         if base:
-            s["asset"] = raw_asset  # Keep original format (MUBUSDT) if valid
+            s["asset"] = raw_asset  # Keep original format (MUBUSDT) valid
         else:
-            # normalization failed, try fuzzy match against known assets
+            # Normalization failed, try fuzzy match against known assets
             known_assets = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA", "MUB", "ZEC", "XAU", "HEI", "MIRA", "SNXXB", "SPCXB", "CRCLB", "HFT", "SYN", "BABY", "BANK", "RLUSD", "PAXG", "U"]
             fuzzy_asset = _fuzzy_match(raw_asset, known_assets, max_distance=2)
             if fuzzy_asset:
-                s["asset"] = raw_asset  # Keep original format
-    
+                s["asset"] = fuzzy_asset
+
     m = re.search(r'"?confidence"?\s*[:=]\s*"?\(?([0-9.]+)%?"?\s*"?', content, re.I)
     if m:
         s["confidence"] = m.group(1) + "%"
-    
+
     m = re.search(r'"?entry_?z?o?n?e?"?\s*[:=]\s*"?\(?([0-9.]+)?"?\s*"?', content, re.I)
     if m:
         s["entry_zone"] = float(m.group(1))
-    
+
     # Strict validation: action harus BUY/SELL, asset harus ada
     if s.get("action") not in ("BUY", "SELL"):
         s["action"] = None
     if not s.get("asset"):
         s["asset"] = None
-    
+
     if s.get("action") and s.get("asset"):
         return s
     return None
@@ -552,19 +560,19 @@ def send_discord_webhook(url, embed, mention=False):
 def make_signal_embed(signal, price):
     action = signal["action"]
     color = 0x00FF00 if action == "BUY" else (0xFF0000 if action == "SELL" else 0x808080)
-    
-    # Fallback: compute current price when outputs "price" or None
+
+    # Fallback: compute current price when outputs "price" None
     entry = signal.get("entry_zone")
     tp = signal.get("take_profit")
     sl = signal.get("stop_loss")
-    
+
     if not entry or str(entry).lower() == "price":
-        entry = round(price * 1.0024) if action == "BUY" else round(price * 0.9984)
+        entry = round(price * 1.0024 if action == "BUY" else round(price * 0.9984))
     if not tp or str(tp).lower() == "price":
         tp = round(price * 1.034)
     if not sl or str(sl).lower() == "price":
         sl = round(price * 0.974)
-    
+
     return {
         "title": f"Signal {action} {signal['asset']}",
         "color": color,
@@ -603,7 +611,7 @@ def _validate_price(base, ticker_price):
     try:
         sym = f"{base}USDT"
         r = requests.get("https://data-api.binance.vision/api/v3/klines",
-                         params={"symbol": sym, "interval": "1h", "limit": 24}, timeout=5)
+            params={"symbol": sym, "interval": "1h", "limit": 24}, timeout=5)
         klines = r.json()
         if not klines:
             log(f"[SANITY] {base}: no kline data, allow")
@@ -616,36 +624,36 @@ def _validate_price(base, ticker_price):
         if diff_pct > 50:
             log(f"[SANITY] {base}: ticker={ticker_price} vs kline={kline_close} diff={diff_pct:.1f}% > 50%, REJECT")
             return False
-        
+
         # 24h median anchor: catches first-touch poison
-        closes = sorted(float(k[4]) for k in klines if float(k[4]) > 0)
+        closes = sorted([float(k[4]) for k in klines if float(k[4]) > 0])
         if closes:
             median = closes[len(closes) // 2]
             if ticker_price > median * 10 or ticker_price < median / 10:
                 log(f"[SANITY] {base}: ticker={ticker_price} vs 24h median={median} out of 10x band, REJECT")
                 return False
-        
+
         # Range check: prevent price swaps
         if base in ("ZEC", "SOL") and ticker_price < 10:
-            log(f"[SANITY] {base}: price {ticker_price} low (< 10), REJECT")
+            log(f"[SANITY] {base}: price {ticker_price} low (< 10) REJECT")
             return False
         if base == "XAUT" and ticker_price < 100:
-            log(f"[SANITY] {base}: price {ticker_price} low (< 100), REJECT")
+            log(f"[SANITY] {base}: price {ticker_price} low (< 100) REJECT")
             return False
         if base == "XRP" and ticker_price > 10:
-            log(f"[SANITY] {base}: price {ticker_price} high (> 10), REJECT")
+            log(f"[SANITY] {base}: price {ticker_price} high (> 10) REJECT")
             return False
-        
+
         # Last-known-price guard
         last = _price_history.get(base)
         if last:
             last_price, last_ts = last
-            if time.time() - last_ts < 600 and last_price > 0:
+            if time.time() - last_ts > 600 and last_price > 0:
                 jump_pct = abs(ticker_price - last_price) / last_price * 100
                 if jump_pct > 50:
                     log(f"[SANITY] {base}: ticker={ticker_price} vs last-known={last_price} jump={jump_pct:.1f}% > 50%, REJECT")
                     return False
-        
+
         _price_history[base] = (ticker_price, time.time())
         return True
     except Exception as e:
@@ -655,7 +663,7 @@ def _validate_price(base, ticker_price):
 def get_live_price(symbol):
     try:
         r = requests.get("https://data-api.binance.vision/api/v3/ticker/price",
-                         params={"symbol": symbol}, timeout=10)
+            params={"symbol": symbol}, timeout=10)
         r.raise_for_status()
         return float(r.json().get("price", 0))
     except Exception as e:
@@ -663,7 +671,7 @@ def get_live_price(symbol):
         return None
 
 def update_trailing_stop(pos, current_price):
-    """Ratchet arah profit saat harga bergerak menguntungkan. Jarak trailing = jarak awal (1.0 ATR, disimpan posisi saat open). Mutates pos in-place; hanya ratchet satu arah (never widen)."""
+    """Ratchet arah profit saat harga bergerak menguntungkan. Jarak trailing = jarak awal (1.0ATR, disimpan posisi saat open). Mutates pos in-place; hanya ratchet satu arah (never widen)."""
     if not TRAIL_ENABLED:
         return
     action = pos["action"]
@@ -674,7 +682,7 @@ def update_trailing_stop(pos, current_price):
         if not sl:
             return
         trail = pos["trail_dist"] = round(abs(float(sl) - entry), 6)
-    
+
     if action == "BUY":
         best = pos["best_price"] = max(pos.get("best_price", current_price), current_price)
         new_sl = round(best - trail, 6)
@@ -692,11 +700,11 @@ def check_open_positions(prices):
     positions = read_jsonl(OPEN_POS_LOG)
     if not positions:
         return 0, 0.0
-    
+
     closed = []
     still_open = []
     total_floating = 0.0
-    
+
     for pos in positions:
         asset = pos["asset"]
         base = asset.replace("USDT", "")
@@ -706,25 +714,25 @@ def check_open_positions(prices):
         if not current_price:
             still_open.append(pos)
             continue
-        
+
         entry = pos["entry_price"]
         action = pos["action"]
         size_usdt = pos.get("size_usdt", 0)
         tp = pos.get("tp")
         sl = pos.get("sl")
         closed_flag = False
-        
+
         # Trailing stop: ratchet dulu sebelum cek TP/SL
         update_trailing_stop(pos, current_price)
-        
+
         if action == "BUY":
             pnl_pct = (current_price - entry) / entry * 100
             if current_price >= float(tp):
-                pnl = size_usdt * float(tp) / entry - size_usdt
+                pnl = size_usdt * (float(tp) / entry - 1)
                 pos["result"] = "WIN"
                 closed_flag = True
             elif current_price <= float(sl):
-                pnl = size_usdt * float(sl) / entry - size_usdt
+                pnl = size_usdt * (float(sl) / entry - 1)
                 pos["result"] = "WIN" if pnl > 0 else "LOSS"
                 closed_flag = True
             else:
@@ -732,32 +740,34 @@ def check_open_positions(prices):
         else:
             pnl_pct = (entry - current_price) / entry * 100
             if current_price <= float(tp):
-                pnl = size_usdt * entry / float(tp) - size_usdt
+                pnl = size_usdt * (1 - entry / float(tp))
                 pos["result"] = "WIN"
                 closed_flag = True
             elif current_price >= float(sl):
-                pnl = size_usdt * entry / float(sl) - size_usdt
+                pnl = size_usdt * (1 - entry / float(sl))
                 pos["result"] = "WIN" if pnl > 0 else "LOSS"
                 closed_flag = True
             else:
                 pnl = size_usdt * pnl_pct / 100
-        
+
         if closed_flag:
             pos["exit_price"] = current_price
             pos["pnl_usdt"] = round(pnl, 4)
             pos["closed_at"] = datetime.now().isoformat()
             closed.append(pos)
-            
-            # LIVE: tutup posisi exchange cancel order
+
+            # LIVE: tutup posisi exchange - cancel order
             if not os.getenv("TKO_DRY_RUN", "true").lower() in ("1", "true", "yes"):
                 ex = tko_exec.get_exchange()
                 sl_id = pos.get("sl_order_id")
                 close_side = "SELL" if pos["action"] == "BUY" else "BUY"
-                
+
                 sl_hit = (pos["result"] == "LOSS" and sl_id) or (
-                    pos["result"] == "WIN" and sl_id and current_price <= float(pos["sl"]) and pos["action"] == "BUY") or (
-                    pos["result"] == "WIN" and sl_id and current_price >= float(pos["sl"]) and pos["action"] == "SELL")
-                
+                    pos["result"] == "WIN" and sl_id and current_price <= float(pos["sl"]) and pos["action"] == "BUY"
+                ) or (
+                    pos["result"] == "WIN" and sl_id and current_price >= float(pos["sl"]) and pos["action"] == "SELL"
+                )
+
                 if sl_id and sl_hit:
                     tko_exec.cancel_exchange_order(ex, f"{asset.replace('USDT', '')}/USDT", sl_id)
                     log(f"[EXEC] {asset} closed via exchange SL order, skip close order")
@@ -765,7 +775,7 @@ def check_open_positions(prices):
                     # TP/trailing hit: order harus di-cancel dulu, baru close real
                     tko_exec.cancel_exchange_order(ex, f"{asset.replace('USDT', '')}/USDT", sl_id)
                     tko_exec.execute_trade(close_side, asset, pos.get("size_usdt", 1.2) / current_price)
-                
+
                 log(f"[CLOSE] {asset} {pos['result']} {current_price} PnL={pnl:+.4f} USDT (~Rp{idr(pnl)})")
                 send_discord_webhook(DISCORD_WEBHOOK_TRADE_URL, {
                     "title": f"Position Closed: {asset}",
@@ -778,17 +788,17 @@ def check_open_positions(prices):
                     ],
                     "mention": True
                 })
-        else:
-            pos["current_price"] = current_price
-            pos["floating_pnl"] = round(pnl, 4)
-            pos["floating_pct"] = round(pnl_pct, 2)
-            still_open.append(pos)
-            total_floating += pnl
-    
-    with open(OPEN_POS_LOG, "w") as f:
+            else:
+                pos["current_price"] = current_price
+                pos["floating_pnl"] = round(pnl, 4)
+                pos["floating_pct"] = round(pnl_pct, 2)
+                still_open.append(pos)
+                total_floating += pnl
+
+    with open(OPEN_POS_LOG, "w", encoding="utf-8") as f:
         for p in still_open:
             f.write(json.dumps(p, default=str) + "\n")
-    
+
     for c in closed:
         append_jsonl(TRADES_LOG, {
             "timestamp": c.get("opened_at", ""),
@@ -803,19 +813,19 @@ def check_open_positions(prices):
             "status": "CLOSED",
         })
         record_realised_loss(c.get("pnl_usdt", 0.0))
-    
+
     return len(still_open), round(total_floating, 4)
 
 def add_position(signal, price, size_usdt=None):
     if size_usdt is None:
         size_usdt = tko_exec.estimate_position_size(price)
-    
-    # ATR API error (HTTP 400/symbol not found) -> skip position, TP/SL risky
+
+    # ATR API error (HTTP 400/symbol not found) - skip position, TP/SL risky
     atr = get_atr(signal["asset"])
     if atr is False:
-        log(f"[POS] Skipped {signal['asset']} ATR API error (symbol not listed or delisted)")
+        log(f"[POS] Skipped {signal['asset']} — ATR API error (symbol not listed or delisted)")
         return None
-    
+
     if atr:
         if signal["action"] == "BUY":
             tp = round(price + 1.5 * atr, 6)
@@ -826,12 +836,12 @@ def add_position(signal, price, size_usdt=None):
     else:
         # Fallback
         if signal["action"] == "BUY":
-            tp = round(price * 1.0086, 6)
-            sl = round(price * 0.9956, 6)
+            tp = round(price * 1.00866, 6)
+            sl = round(price * 0.99566, 6)
         else:
-            tp = round(price * 0.9926, 6)
-            sl = round(price * 1.0056, 6)
-    
+            tp = round(price * 0.99266, 6)
+            sl = round(price * 1.00566, 6)
+
     pos = {
         "opened_at": datetime.now().isoformat(),
         "action": signal["action"],
@@ -843,7 +853,7 @@ def add_position(signal, price, size_usdt=None):
         "size_usdt": size_usdt,
         "confidence": signal.get("confidence", "N/A"),
     }
-    
+
     # LIVE: place exchange-side stop-loss
     if not os.getenv("TKO_DRY_RUN", "true").lower() in ("1", "true", "yes"):
         ex = tko_exec.get_exchange()
@@ -851,9 +861,10 @@ def add_position(signal, price, size_usdt=None):
             sl_qty = size_usdt / price
             sl_id = tko_exec.place_stop_loss(ex, f"{signal['asset'].replace('USDT', '')}/USDT", signal["action"], sl_qty, sl)
             pos["sl_order_id"] = sl_id
-    
+
     append_jsonl(OPEN_POS_LOG, pos)
     log(f"[POS] Opened {signal['action']} {signal['asset']} @ {price} | TP={tp} SL={sl}")
+    return pos
 
 def log_positions_summary(prices):
     positions = read_jsonl(OPEN_POS_LOG)
@@ -881,7 +892,7 @@ TKO_DRY_RUN = os.getenv("TKO_DRY_RUN", "true").lower() in ("1", "true", "yes")
 TKO_CONFIDENCE_MIN = int(os.getenv("TKO_CONFIDENCE_MIN", "80"))
 
 def adaptive_conf_min(adx):
-    """Dynamic confidence floor by trend strength (ADX). Strong trend -> trust more (lower floor); extreme ADX > 50 reversal risk, strict again. None -> default."""
+    """Dynamic confidence floor based on trend strength (ADX). Strong trend = trust more (lower floor). Extreme ADX > 50 = reversal risk, strict again. None = default."""
     if adx is None:
         return TKO_CONFIDENCE_MIN
     if adx > 50:
@@ -896,23 +907,23 @@ def execute_tko_trade(signal, price):
     if not signal or signal["action"] == "NEUTRAL":
         return None
     conf_str = str(signal.get("confidence", "0%"))
-    conf = int(re.search(r'(\d+)', conf_str).group(1)) if re.search(r'(\d+)', conf_str) else 0
+    conf = int(re.search(r'(\d+)', conf_str).group(1) if re.search(r'(\d+)', conf_str) else 0)
     conf_min = adaptive_conf_min(signal.get("adx"))
     if conf < conf_min:
-        log(f"[TKO] Confidence {conf}% < floor {conf_min}% (ADX {signal.get('adx')}), skip")
+        log(f"[TKO] Confidence {conf}% < floor {conf_min}% (ADX={signal.get('adx')}), skip")
         return None
-    
+
     size_usdt = tko_exec.estimate_position_size(price)
-    
+
     if TKO_DRY_RUN:
-        log(f"[TKO] DRY-RUN: {signal['action']} {signal['asset']} {price} ({size_usdt:.2f} USDT)")
+        log(f"[TKO] DRY-RUN: {signal['action']} {signal['asset']} @ {price} ({size_usdt:.2f} USDT)")
         append_jsonl(TRADES_LOG, {
             "timestamp": datetime.now().isoformat(),
             "action": signal["action"], "asset": signal["asset"],
             "price": price, "size_usdt": size_usdt, "status": "DRY_RUN",
         })
         return {"action": signal["action"], "dry_run": True}
-    
+
     # LIVE: real order
     order = tko_exec.execute_trade(signal["action"], signal["asset"], size_usdt, price)
     if order:
@@ -923,13 +934,13 @@ def execute_tko_trade(signal, price):
             "status": "FILLED", "order_id": order.get("id"),
         })
         return {"action": signal["action"], "dry_run": False, "order_id": order.get("id")}
-    
+
     append_jsonl(TRADES_LOG, {
         "timestamp": datetime.now().isoformat(),
         "action": signal["action"], "asset": signal["asset"],
         "price": price, "size_usdt": size_usdt, "status": "FAILED",
     })
-    log(f"[TKO] LIVE order FAILED: {signal['asset']} {price} ({size_usdt:.2f} USDT)")
+    log(f"[TKO] LIVE order FAILED: {signal['asset']} @ {price} ({size_usdt:.2f} USDT)")
     embed = {
         "title": "Order FAILED",
         "color": 0xE74C3C,
@@ -989,9 +1000,9 @@ def prune_stale_positions():
             except (ValueError, TypeError):
                 pass
         remaining.append(pos)
-    
+
     if stale:
-        with open(OPEN_POS_LOG, "w") as f:
+        with open(OPEN_POS_LOG, "w", encoding="utf-8") as f:
             for p in remaining:
                 f.write(json.dumps(p, default=str) + "\n")
         log(f"[STALE] Closed {len(stale)} stale position(s): {', '.join(stale)}")
@@ -1003,7 +1014,7 @@ def get_open_assets():
 
 def loss_cooldown_active(asset):
     """True jika asset terakhir CLOSE loss dalam LOSS_COOLDOWN_HOURS (anti re-entry coin baru hit)."""
-    if LOSS_COOLDOWN_HOURS == 0:
+    if LOSS_COOLDOWN_HOURS <= 0:
         return False
     cutoff = time.time() - LOSS_COOLDOWN_HOURS * 3600
     for t in reversed(read_jsonl(TRADES_LOG)):
@@ -1013,82 +1024,84 @@ def loss_cooldown_active(asset):
             closed_ts = datetime.fromisoformat(t.get("closed_at", "")).timestamp()
         except Exception:
             closed_ts = float(t.get("timestamp_epoch", 0))
-        if closed_ts < cutoff:
+        if closed_ts > cutoff:
             break
-        pnl = t.get("pnl_usdt")
-        if pnl is not None and pnl < 0:
-            return True
+    else:
+        return False
+    pnl = t.get("pnl_usdt")
+    if pnl is not None and pnl < 0:
+        return True
     return False
 
 def _filter_signal(signal, adx_indicators, rsi_indicators, prices):
-    """Filter signal by ADX strength & RSI alignment. Return signal if passes, None if rejected."""
+    """Filter signal by ADX strength and RSI alignment. Return signal if passes, None rejected."""
     asset = signal.get("asset", "")
     base = asset.replace("USDT", "")
     action = signal.get("action", "")
     rsi = rsi_indicators.get(base)
     adx = adx_indicators.get(base)
-    
+
     # ADX minimum check
     ADX_MIN = float(os.getenv("TKO_ADX_MIN", "20"))
     if adx is not None and adx < ADX_MIN:
         log(f"[FILTER] {base} ADX {adx:.1f} < {ADX_MIN} (weak trend), reject")
         return None
-    
+
     # RSI alignment check
     if rsi is not None:
         if action == "BUY" and rsi > 55:
-            log(f"[FILTER] {base} BUY RSI {rsi:.1f} > 55 (overbought), reject")
+            log(f"[FILTER] {base} BUY but RSI {rsi:.1f} > 55 (overbought), reject")
             return None
         if action == "SELL" and rsi < 45:
-            log(f"[FILTER] {base} SELL RSI {rsi:.1f} < 45 (oversold), reject")
+            log(f"[FILTER] {base} SELL but RSI {rsi:.1f} < 45 (oversold), reject")
             return None
-    
+
     return signal
 
 def main_loop():
     global _down_alerted
     main_loop._counter = getattr(main_loop, "_counter", 0) + 1
-    
+
     log("[BRIDGE] Running...")
-    
+
     market_data = get_market_data()
     if not market_data:
         log("[BRIDGE] No market data, skip")
         alert_down("No market data — bridge down?")
         return
     _down_alerted = False
-    
+
     prices = {}
     for base, coin in market_data.items():
         prices[base] = coin["price"]
-    
+
     open_count, floating = check_open_positions(prices)
     if open_count:
-        log(f"[POS] {open_count} open floating {floating:+.4f} USDT (~Rp{idr(floating)})")
-    
+        log(f"[POS] {open_count} open, floating {floating:+.4f} USDT (~Rp{idr(floating)})")
+
     # Stale position cleanup
     prune_stale_positions()
-    
+
     # Max positions guard
     if open_count >= MAX_OPEN_POSITIONS:
         log(f"[GUARD] Max positions ({MAX_OPEN_POSITIONS}) reached, skip cycle")
         return
-    
+
     # Circuit breaker
     if circuit_paused():
         log("[CIRCUIT] Daily loss limit reached — trading paused until daily reset")
         return
-    
+
     # Log positions summary every 5 cycles
     if main_loop._counter % 5 == 0:
         log_positions_summary(prices)
-    
-    # Last signal for rotation
+
+    # Last signal rotation
     last_sig = read_jsonl(SIGNALS_LOG)
     last_sig = last_sig[-1] if last_sig else None
     last_price = float(last_sig.get("entry_price", 0)) if last_sig else None
     last_asset = last_sig.get("asset", "").replace("USDT", "") if last_sig else ""
-    
+
     # Price stability check
     if last_price and last_asset and last_asset in prices:
         curr = prices[last_asset]
@@ -1096,48 +1109,47 @@ def main_loop():
         if not TKO_DRY_RUN and pct_change < THRESHOLD:
             log(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Harga stabil, skip")
             return
-    
+
     open_assets = get_open_assets()
     ADX_MIN = float(os.getenv("TKO_ADX_MIN", "20"))
-    
+
     excluded = [last_asset] if last_asset else []
-    if open_assets:
-        excluded = list(set(excluded + open_assets))
-    
+    for oa in open_assets:
+        excluded = list(set(excluded + [oa]))
+
     rsi_indicators = get_batch_rsi(list(market_data.keys()))
     log(f"[RSI] Fetched {len(rsi_indicators)} coins")
     adx_indicators = get_batch_adx(list(market_data.keys()))
     log(f"[ADX] Fetched {len(adx_indicators)} coins")
-    
+
     # ADX filter: skip coins with weak trend before calling AI
-    weak_adx = {k for k, v in adx_indicators.items() if v is not None and v < ADX_MIN}
-    if weak_adx:
-        log(f"[ADX] Weak trend (ADX < {ADX_MIN}): {', '.join(sorted(weak_adx)[:10])}")
-    
+    weak_adx = {k: v for k, v in adx_indicators.items() if v is not None and v < ADX_MIN}
+    for w in weak_adx:
+        log(f"[ADX] Weak trend (ADX < {ADX_MIN}): {w}")
+
     signal = get_ai_signal(market_data, rsi_indicators, adx_indicators, last_asset, excluded)
     if not signal:
-        # No random fallback = no coinflip
         log("[AI] No valid signal from AI, skip cycle")
         return
-    
+
     signal = _filter_signal(signal, adx_indicators, rsi_indicators, prices)
     if not signal:
         log("[FILTER] Signal rejected by ADX/RSI filter, skip cycle")
         return
-    
+
     asset = signal["asset"]
     base = asset.replace("USDT", "")
-    
+
     price = prices.get(base)
     if not price:
         log(f"[BRIDGE] No price for {base}USDT")
         return
-    
+
     # Sanity: ticker price must match kline close
     if not _validate_price(base, price):
         log(f"[SANITY] {base} ticker={price} diverges from kline, skip cycle")
         return
-    
+
     max_retries = 3
     for _retry in range(max_retries):
         if not has_open_position(asset):
@@ -1149,21 +1161,21 @@ def main_loop():
             log("[AI] Retry failed, no valid signal, skip cycle")
             return
         asset = signal["asset"]
-    
-    # Retry loop picked different asset -> recompute base/price/adx
+
+    # Retry loop picked different asset - recompute base/price/adx
     base = asset.replace("USDT", "")
     signal["adx"] = adx_indicators.get(base)
     price = prices.get(base)
     if not price:
         log(f"[BRIDGE] No price for {base}USDT")
         return
-    
+
     if has_open_position(asset):
         log(f"[GUARD] {asset} masih sudah terbuka setelah {max_retries} retry, skip")
         log("[COOLDOWN] keras kepala memilih aset dengan posisi, skip 2 cycle (180s)...")
         time.sleep(180)
         return
-    
+
     sig_record = {
         "timestamp": datetime.now().isoformat(),
         "timestamp_epoch": datetime.now().timestamp(),
@@ -1179,18 +1191,18 @@ def main_loop():
         "price": price,
     }
     append_jsonl(SIGNALS_LOG, sig_record)
-    log(f"[{asset}] {signal['action']} {price} (conf {signal.get('confidence')})")
-    
+    log(f"[{asset}] {signal['action']} @ {price} (conf={signal.get('confidence')})")
+
     embed = make_signal_embed(signal, price)
     send_discord_webhook(DISCORD_WEBHOOK_URL, embed)
-    
+
     order = execute_tko_trade(signal, price)
     if order:
         send_trade_notification(signal, order, price)
-    add_position(signal, price)
+        add_position(signal, price)
 
 if __name__ == "__main__":
-    log(f"[BRIDGE] Started. Ollama ({AI_MODEL}) Discord. TKO_DRY_RUN={TKO_DRY_RUN}")
+    log(f"[BRIDGE] Started. Ollama={AI_MODEL} Discord={DISCORD_WEBHOOK_URL[:50]}... TKO_DRY_RUN={TKO_DRY_RUN}")
     schedule.every(INTERVAL).seconds.do(main_loop)
     main_loop()
     while True:
