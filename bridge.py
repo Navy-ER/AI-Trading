@@ -347,42 +347,23 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             if adx is not None:
                 parts.append(f"ADX={adx:.1f}")
             lines.append(" ".join(parts))
-        
+
         excluded_line = ""
         if excluded_assets:
             excluded_str = ", ".join(excluded_assets)
             excluded_line = f"- ASET SUDAH PUNYA POSISI: {excluded_str}. DILARANG keras memilih aset yang ada list ini. Jika memilihnya, sinyal akan dianggap INVALID.\n- WAJIB pilih koin LAIN yang tidak ada list ASET SUDAH PUNYA POSISI.\n"
-        
-        market_text = "\n".join(lines)
-        prompt = f"""Kamu adalah analis pasar crypto. Pilih SATU koin terbaik dari data bawah untuk BUY atau SELL.
-PERATURAN KRUSIAL:
-- WAJIB pilih dari daftar koin bawah ini (pilih yang PALING JELAS terlihat bullish ATAU bearish)
-- TOLAK semua pair berikut: EULUSDT, BTCUSDT, ETHUSDT, USDTUSDC, BUSDUSDT, TUSDUSDT, USDCUSDT, USD1USDT, FDUSDUSDT, PYUSDUSDT, USDEUSDT, DAIUSDT (stablecoin/forex, bukan crypto spekulatif)
-- TOLAK pair dengan volume < 1 juta
-- Pilih hanya crypto spot USDT pairs
-- TIDAK BOLEH memilih pair yang sama 2 kali berturut-turut
-- INDIKATOR RSI: RSI < 30 oversold (mendukung BUY), RSI > 70 overbought (mendukung SELL). Gunakan RSI sebagai konfirmasi, bukan sinyal tunggal.
-- INDIKATOR ADX: ADX < 20 lemah/tren sideways (hindari entry), ADX > 20 tren cukup kuat (izinkan entry). ADX > 50 tren sangat kuat (hati-hati reversi).
-- WAJIB sertakan field "confidence" berisi angka persen 50-95 (contoh "confidence":"75%"). JANGAN pernah menghilangkan atau mengosongkan confidence.
-- Sinyal terakhir: {last_asset}. JANGAN pilih {last_asset} kali ini, wajib rotasi koin lain
-{excluded_line}Data pasar (hanya dari list ini yang boleh dipilih):
-{market_text}
-Berikan 1 sinyal trading dalam format JSON (HANYA JSON, tanpa markdown):
-Contoh output yang BENAR (numeric, bukan string):
-{{"action":"BUY","asset":"XRPUSDT","entry_zone":1.0649,"take_profit":1.07000,"stop_loss":1.06000,"rrr":"1:2","confidence":"75%","reason":"alasan singkat"}}
 
-Contoh output yang SALAH (JANGAN tulis seperti ini):
-{{"action":"BUY","asset":"XRPUSDT","entry_zone":"price","take_profit":"price","stop_loss":"price"}} SALAH, jangan pakai "price"
-Output HANYA JSON tanpa markdown."""
+        market_text = "\n".join(lines)
+        prompt = (f"Pilih SATU koin untuk BUY/SELL. JANGAN pilih stablecoin, SOL, UNI, ADA, EUL, GIGGLE. JANGAN pilih koin yang sama berturut-turut (Terakhir: {last_asset}).\n{excluded_line}{market_text}\nBalas HANYA dengan JSON murni tanpa markdown: {{\"coin\":\"SYMBOL\", \"action\":\"BUY/SELL\", \"confidence\":\"XX%\", \"reason\":\"alasan\"}}")
 
         url = OMNIROUTER_URL
         omni_api_key = os.getenv("OMNIROUTER_API_KEY", "")
-        
+
         for attempt in range(3):
             p = prompt
             if attempt > 0 and last_asset:
                 p += f"\nPERINGATAN: {last_asset} SUDAH dipilih pada sinyal terakhir. Pilih koin LAIN selain {last_asset}."
-            
+
             payload = {
                 "model": AI_MODEL,
                 "messages": [
@@ -395,43 +376,43 @@ Output HANYA JSON tanpa markdown."""
             headers = {"Content-Type": "application/json"}
             if omni_api_key:
                 headers["Authorization"] = f"Bearer {omni_api_key}"
-            
+
             # Use robust HTTP client: handles 502, JSON extraction, retry
             sig, raw_content = call_ai_signal(url, payload, headers, max_retries=1)
-            
+
             if not sig:
                 log(f"[AI] No valid signal extracted on attempt {attempt + 1}: {raw_content[:200] if raw_content else 'unknown'}")
                 continue
-            
+
             base = _normalize_base(sig.get("asset", ""))
             if not base:
                 log("[AI] No valid asset in response, retry")
                 continue
-            
+
             if "confidence" not in sig or not re.search(r"\d", str(sig.get("confidence", ""))):
                 log("[AI] No confidence in signal, retry")
                 continue
-            
+
             if base not in market_data:
                 log(f"[AI] Asset {sig.get('asset')} not top 20, retrying")
                 continue
-            
+
             if base == last_asset and last_asset:
                 log(f"[AI] {base} sama dengan sinyal terakhir, retry rotasi")
                 continue
-            
+
             if excluded_assets and base in excluded_assets:
                 log(f"[AI] {base} ada di excluded (posisi terbuka/terakhir), retry rotasi")
                 continue
-            
+
             sig["asset"] = f"{base}USDT"
-            
+
             # handle typo entry_zoe
             if "entry_zone" not in sig and "entry_zoe" in sig:
                 sig["entry_zone"] = sig.pop("entry_zoe")
-            
+
             return sig
-        
+
         return None
     except Exception as e:
         log(f"[AI] Error: {e}")
