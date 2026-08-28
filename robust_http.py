@@ -99,9 +99,9 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     for block in reversed(fenced_matches):  # Last valid block wins
         try:
             parsed = json.loads(block)
-            if isinstance(parsed, dict) and parsed.get("action") and parsed.get("asset"):
+            if isinstance(parsed, dict) and parsed.get("action") and (parsed.get("asset") or parsed.get("coin")):
                 logger.debug("[HTTP] Extracted JSON from markdown fence")
-                return parsed
+                return _normalize_signal(parsed)
         except json.JSONDecodeError:
             continue
     
@@ -112,9 +112,9 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     for block in reversed(blocks):  # Last valid block wins
         try:
             parsed = json.loads(block)
-            if isinstance(parsed, dict) and parsed.get("action") and parsed.get("asset"):
+            if isinstance(parsed, dict) and parsed.get("action") and (parsed.get("asset") or parsed.get("coin")):
                 logger.debug("[HTTP] Extracted JSON from {...} block")
-                return parsed
+                return _normalize_signal(parsed)
         except json.JSONDecodeError:
             continue
     
@@ -124,35 +124,61 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     if action_match:
         result["action"] = action_match.group(1).upper()
     
-    asset_match = re.search(r'"?asset"?\s*[:=]\s*"?([A-Z0-9\-_]+)"?', text, re.IGNORECASE)
+    asset_match = re.search(r'"?(?:asset|coin)"?\s*[:=]\s*"?([A-Z0-9\-_]+)"?', text, re.IGNORECASE)
     if asset_match:
-        result["asset"] = asset_match.group(1).upper()
+        result["coin"] = asset_match.group(1).upper()
     
     conf_match = re.search(r'"?confidence"?\s*[:=]\s*"?([0-9.]+)%?"?', text, re.IGNORECASE)
     if conf_match:
-        result["confidence"] = conf_match.group(1) + "%"
-    
-    entry_match = re.search(r'"?entry_?z?o?n?e?"?\s*[:=]\s*"?([0-9.]+)"?', text, re.IGNORECASE)
-    if entry_match:
-        result["entry_zone"] = float(entry_match.group(1))
-    
-    tp_match = re.search(r'"?take_?profit"?\s*[:=]\s*"?([0-9.]+)"?', text, re.IGNORECASE)
-    if tp_match:
-        result["take_profit"] = float(tp_match.group(1))
-    
-    sl_match = re.search(r'"?stop_?loss"?\s*[:=]\s*"?([0-9.]+)"?', text, re.IGNORECASE)
-    if sl_match:
-        result["stop_loss"] = float(sl_match.group(1))
+        result["confidence"] = int(float(conf_match.group(1)))
     
     reason_match = re.search(r'"?reason"?\s*[:=]\s*"?([^"]+)"?', text, re.IGNORECASE)
     if reason_match:
         result["reason"] = reason_match.group(1).strip()
     
-    if result.get("action") and result.get("asset"):
+    if result.get("action") and result.get("coin"):
         logger.debug("[HTTP] Extracted JSON via regex fallback")
-        return result
+        return _normalize_signal(result)
     
     return None
+
+
+def _normalize_signal(sig: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize signal dict: ensure coin key, convert confidence to int (strip % if string),
+    validate required fields.
+    Required keys: coin, action, confidence, reason
+    """
+    # Handle coin/asset key
+    if "coin" not in sig and "asset" in sig:
+        sig["coin"] = sig["asset"]
+    # Remove asset key if present (prefer coin)
+    if "asset" in sig:
+        del sig["asset"]
+    
+    # Normalize confidence: strip %, convert to int
+    if "confidence" in sig:
+        conf = sig["confidence"]
+        if isinstance(conf, str):
+            conf = conf.replace("%", "").strip()
+            try:
+                sig["confidence"] = int(float(conf))
+            except (ValueError, TypeError):
+                pass
+        elif isinstance(conf, (int, float)):
+            sig["confidence"] = int(conf)
+    
+    # Validate required fields
+    if sig.get("action") not in ("BUY", "SELL"):
+        return None
+    if not sig.get("coin"):
+        return None
+    if "confidence" not in sig or not isinstance(sig["confidence"], int):
+        return None
+    if not sig.get("reason"):
+        return None
+    
+    return sig
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -364,23 +390,23 @@ data: [DONE]"""
     
     # Test extract_json_from_text
     test_cases = [
-        # Markdown fence
-        ('```json\n{"action":"BUY","asset":"XRPUSDT","confidence":"75%"}\n```',
-         {"action": "BUY", "asset": "XRPUSDT", "confidence": "75%"}),
-        # Prose JSON
-        ('Berikut sinyal: {"action":"SELL","asset":"DOGEUSD","entry_zone":0.15} semoga membantu',
-         {"action": "SELL", "asset": "DOGEUSD", "entry_zone": 0.15}),
+        # Markdown fence - new format with coin, confidence as int
+        ('```json\n{"action":"BUY","coin":"XRPUSDT","confidence":75,"reason":"test"}\n```',
+         {"action": "BUY", "coin": "XRPUSDT", "confidence": 75, "reason": "test"}),
+        # Prose JSON - new format
+        ('Berikut sinyal: {"action":"SELL","coin":"DOGEUSD","confidence":80,"reason":"oversold"} semoga membantu',
+         {"action": "SELL", "coin": "DOGEUSD", "confidence": 80, "reason": "oversold"}),
         # Echo then real answer (last wins)
-        ('Contoh: {"action":"BUY","asset":"XRPUSDT","confidence":"75%"} Jawaban: {"action":"SELL","asset":"DOGEUSD","confidence":"80%"}',
-         {"action": "SELL", "asset": "DOGEUSD", "confidence": "80%"}),
-        # Key-value fallback
-        ('action=BUY asset=MUBUSDT confidence=80% entry=0.5',
-         {"action": "BUY", "asset": "MUBUSDT", "confidence": "80%", "entry_zone": 0.5}),
+        ('Contoh: {"action":"BUY","coin":"XRPUSDT","confidence":75,"reason":"x"} Jawaban: {"action":"SELL","coin":"DOGEUSD","confidence":80,"reason":"y"}',
+         {"action": "SELL", "coin": "DOGEUSD", "confidence": 80, "reason": "y"}),
+        # Key-value fallback - new format
+        ('action=BUY coin=MUBUSDT confidence=80% reason=test',
+         {"action": "BUY", "coin": "MUBUSDT", "confidence": 80, "reason": "test"}),
         # Non-JSON text
         ("maaf saya tidak bisa membantu", None),
-        # Truncated JSON parser extracts partial (useful behavior)
-        ('{"action":"BUY","asset":"BTCUSDT"',
-         {"action": "BUY", "asset": "BTCUSDT"}),
+        # Test with asset key (should convert to coin)
+        ('{"action":"BUY","asset":"BTCUSDT","confidence":70,"reason":"test"}',
+         {"action": "BUY", "coin": "BTCUSDT", "confidence": 70, "reason": "test"}),
     ]
     
     print("\nTesting extract_json_from_text...")

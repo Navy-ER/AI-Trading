@@ -354,7 +354,13 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             excluded_line = f"- ASET SUDAH PUNYA POSISI: {excluded_str}. DILARANG keras memilih aset yang ada list ini. Jika memilihnya, sinyal akan dianggap INVALID.\n- WAJIB pilih koin LAIN yang tidak ada list ASET SUDAH PUNYA POSISI.\n"
 
         market_text = "\n".join(lines)
-        prompt = (f"Pilih SATU koin untuk BUY/SELL. JANGAN pilih stablecoin, SOL, UNI, ADA, EUL, GIGGLE. JANGAN pilih koin yang sama berturut-turut (Terakhir: {last_asset}).\n{excluded_line}{market_text}\nBalas HANYA dengan JSON murni tanpa markdown: {{\"coin\":\"SYMBOL\", \"action\":\"BUY/SELL\", \"confidence\":\"XX%\", \"reason\":\"alasan\"}}")
+        prompt = (
+            f"Pilih SATU koin untuk BUY/SELL. JANGAN pilih stablecoin, SOL, UNI, ADA, EUL, GIGGLE. "
+            f"JANGAN pilih koin yang sama berturut-turut (Terakhir: {{last_asset}}).\n"
+            f"{{excluded_line}}{{market_text}}\n"
+            f'Balas HANYA dengan JSON murni tanpa markdown: '
+            f'{{\"coin\":\"SYMBOL\", \"action\":\"BUY/SELL\", \"confidence\":\"XX%\", \"reason\":\"alasan\"}}'
+        )
 
         url = OMNIROUTER_URL
         omni_api_key = os.getenv("OMNIROUTER_API_KEY", "")
@@ -381,31 +387,36 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             sig, raw_content = call_ai_signal(url, payload, headers, max_retries=1)
 
             if not sig:
-                log(f"[AI] No valid signal extracted on attempt {attempt + 1}: {raw_content[:200] if raw_content else 'unknown'}")
+                log(f"[AI] No valid signal extracted on attempt {{attempt + 1}}: {{raw_content[:200] if raw_content else 'unknown'}}")
                 continue
 
-            base = _normalize_base(sig.get("asset", ""))
+            # New format uses 'coin' key, confidence as int
+            coin = sig.get("coin") or sig.get("asset", "")
+            base = _normalize_base(coin)
             if not base:
-                log("[AI] No valid asset in response, retry")
+                log("[AI] No valid coin in response, retry")
                 continue
 
-            if "confidence" not in sig or not re.search(r"\d", str(sig.get("confidence", ""))):
+            confidence = sig.get("confidence")
+            if confidence is None or not isinstance(confidence, int):
                 log("[AI] No confidence in signal, retry")
                 continue
 
             if base not in market_data:
-                log(f"[AI] Asset {sig.get('asset')} not top 20, retrying")
+                log(f"[AI] Asset {{coin}} not top 20, retrying")
                 continue
 
             if base == last_asset and last_asset:
-                log(f"[AI] {base} sama dengan sinyal terakhir, retry rotasi")
+                log(f"[AI] {{base}} sama dengan sinyal terakhir, retry rotasi")
                 continue
 
             if excluded_assets and base in excluded_assets:
-                log(f"[AI] {base} ada di excluded (posisi terbuka/terakhir), retry rotasi")
+                log(f"[AI] {{base}} ada di excluded (posisi terbuka/terakhir), retry rotasi")
                 continue
 
-            sig["asset"] = f"{base}USDT"
+            # Convert to old format for compatibility
+            sig["asset"] = f"{{base}}USDT"
+            sig["confidence"] = f"{{confidence}}%"
 
             # handle typo entry_zoe
             if "entry_zone" not in sig and "entry_zoe" in sig:
@@ -415,7 +426,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
 
         return None
     except Exception as e:
-        log(f"[AI] Error: {e}")
+        log(f"[AI] Error: {{e}}")
         return None
 
 def _normalize_base(asset):
