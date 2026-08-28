@@ -328,8 +328,13 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
     try:
         rsi_data = rsi_data or {}
         adx_data = adx_data or {}
+        
+        # Batasi maksimal 10 koin teratas (berdasarkan volume 24h) untuk mencegah prompt terlalu panjang
+        # market_data sudah di-sort by volume di get_market_data()
+        top_coins = list(market_data.items())[:10]
+        
         lines = []
-        for coin, data in market_data.items():
+        for coin, data in top_coins:
             change = data.get('change_24h', 0)
             vol = data.get('volume_24h', 0) / 1e6
             rsi = rsi_data.get(coin)
