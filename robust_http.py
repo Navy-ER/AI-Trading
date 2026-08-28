@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 def parse_sse_response(raw_text: str) -> str:
     """
     Parse Server-Sent Events (SSE) streaming response.
-    Extracts content from 'data: ' lines, handles [DONE] marker.
-    Returns combined text content.
+    Reads response line by line (split '\n').
+    If line starts with "data: ", extract JSON, get delta.content or message.content from each chunk.
+    Skip empty lines or "[DONE]".
+    Join all delta text pieces into one full string, return for extract_json_from_text.
     """
     if not raw_text:
         return ""
@@ -31,21 +33,41 @@ def parse_sse_response(raw_text: str) -> str:
         line = line.strip()
         if not line:
             continue
+        if line == '[DONE]' or line == 'data: [DONE]':
+            break
         if line.startswith('data: '):
             data = line[6:]  # Remove 'data: ' prefix
-            if data == '[DONE]':
-                break
+            if not data or data == '[DONE]':
+                continue
             try:
                 parsed = json.loads(data)
-                # OpenAI-compatible streaming format
+                
+                # Format 1: OpenAI streaming - choices[0].delta.content
                 delta = parsed.get('choices', [{}])[0].get('delta', {})
                 if 'content' in delta and delta['content']:
                     content_parts.append(delta['content'])
-                # Some APIs use 'text' instead of 'delta.content'
-                elif 'text' in parsed.get('choices', [{}])[0]:
-                    text_val = parsed['choices'][0]['text']
-                    if text_val:
-                        content_parts.append(text_val)
+                    continue
+                
+                # Format 2: OpenAI non-streaming in stream - choices[0].message.content
+                msg = parsed.get('choices', [{}])[0].get('message', {})
+                if 'content' in msg and msg['content']:
+                    content_parts.append(msg['content'])
+                    continue
+                
+                # Format 3: Ollama streaming - response field
+                if 'response' in parsed and parsed['response']:
+                    content_parts.append(parsed['response'])
+                    continue
+                
+                # Format 4: Some APIs use 'text' at top level or in choices[0]
+                if 'text' in parsed and parsed['text']:
+                    content_parts.append(parsed['text'])
+                    continue
+                text_val = parsed.get('choices', [{}])[0].get('text')
+                if text_val:
+                    content_parts.append(text_val)
+                    continue
+                    
             except json.JSONDecodeError:
                 # Non-JSON data line, skip
                 continue
