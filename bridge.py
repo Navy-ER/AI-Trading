@@ -403,7 +403,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
                 continue
 
             if base not in market_data:
-                log(f"[AI] Asset {{coin}} not top 20, retrying")
+                log(f"[AI] Asset {coin} tidak ada di market data, retrying")
                 continue
 
             if base == last_asset and last_asset:
@@ -1134,7 +1134,7 @@ def main_loop():
     
     price = prices.get(base)
     if not price:
-        log(f"[BRIDGE] No price for {asset}")
+        log(f"[BRIDGE] No price for {base}USDT")
         return
     
     # Sanity: ticker price must match kline close
@@ -1159,7 +1159,7 @@ def main_loop():
     signal["adx"] = adx_indicators.get(base)
     price = prices.get(base)
     if not price:
-        log(f"[BRIDGE] No price for {asset}")
+        log(f"[BRIDGE] No price for {base}USDT")
         return
     
     if has_open_position(asset):
