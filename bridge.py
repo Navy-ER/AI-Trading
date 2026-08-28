@@ -387,7 +387,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             sig, raw_content = call_ai_signal(url, payload, headers, max_retries=1)
 
             if not sig:
-                log(f"[AI] No valid signal extracted on attempt {{attempt + 1}}: {{raw_content[:200] if raw_content else 'unknown'}}")
+                log(f"[AI] No valid signal extracted on attempt {attempt + 1}: {raw_content[:200] if raw_content else 'unknown'}")
                 continue
 
             # New format uses 'coin' key, confidence as int
