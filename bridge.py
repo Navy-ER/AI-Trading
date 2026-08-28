@@ -354,13 +354,9 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             excluded_line = f"- ASET SUDAH PUNYA POSISI: {excluded_str}. DILARANG keras memilih aset yang ada list ini. Jika memilihnya, sinyal akan dianggap INVALID.\n- WAJIB pilih koin LAIN yang tidak ada list ASET SUDAH PUNYA POSISI.\n"
 
         market_text = "\n".join(lines)
-        prompt = (
-            f"Pilih SATU koin untuk BUY/SELL. JANGAN pilih stablecoin, SOL, UNI, ADA, EUL, GIGGLE. "
-            f"JANGAN pilih koin yang sama berturut-turut (Terakhir: {{last_asset}}).\n"
-            f"{{excluded_line}}{{market_text}}\n"
-            f'Balas HANYA dengan JSON murni tanpa markdown: '
-            f'{{\"coin\":\"SYMBOL\", \"action\":\"BUY/SELL\", \"confidence\":\"XX%\", \"reason\":\"alasan\"}}'
-        )
+        prompt = f"""Pilih SATU koin HANYA dari daftar data pasar di bawah untuk BUY/SELL. DILARANG memilih BTC, ETH, SOL, UNI, ADA, EUL, GIGGLE, atau stablecoin. DILARANG memilih koin yang sama berturut-turut (Terakhir: {last_asset}).
+                {excluded_line}{market_text}
+                Balas HANYA dengan JSON murni tanpa markdown: {{"coin":"SYMBOL", "action":"BUY/SELL", "confidence":"XX%", "reason":"alasan"}}"""
 
         url = OMNIROUTER_URL
         omni_api_key = os.getenv("OMNIROUTER_API_KEY", "")
