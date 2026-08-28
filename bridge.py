@@ -328,20 +328,25 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
     try:
         rsi_data = rsi_data or {}
         adx_data = adx_data or {}
-        
-        # Batasi maksimal 10 koin teratas (berdasarkan volume 24h) untuk mencegah prompt terlalu panjang
-        # market_data sudah di-sort by volume di get_market_data()
-        top_coins = list(market_data.items())[:10]
-        
+
+        # Batasi maksimal 5 koin teratas (by volume) untuk prompt ultra-singkat
+        top_coins = list(market_data.items())[:5]
+
         lines = []
         for coin, data in top_coins:
             change = data.get('change_24h', 0)
             vol = data.get('volume_24h', 0) / 1e6
             rsi = rsi_data.get(coin)
             adx = adx_data.get(coin)
-            rsi_str = f" RSI={rsi}" if rsi is not None else ""
-            adx_str = f" ADX={adx}" if adx is not None else ""
-            lines.append(f"- {coin}: Price={data['price']:.6f} Change={change:+.2f}% Vol={vol:.1f}M{rsi_str}{adx_str}")
+            # Format ultra-singkat: XRP:1.42 Chg=+1.4% Vol=243M RSI=24.7 ADX=22
+            parts = [f"{coin}:{data['price']:.4g}"]
+            parts.append(f"Chg={change:+.1f}%")
+            parts.append(f"Vol={vol:.0f}M")
+            if rsi is not None:
+                parts.append(f"RSI={rsi:.1f}")
+            if adx is not None:
+                parts.append(f"ADX={adx:.1f}")
+            lines.append(" ".join(parts))
         
         excluded_line = ""
         if excluded_assets:
