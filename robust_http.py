@@ -1,6 +1,6 @@
 """
-Robust HTTP client for bridge.py - handles 502, non-JSON responses, markdown fences.
-Drop-in replacement for requests.post in get_ai_signal.
+Robust HTTP client bridge.py handles 502, non-JSON responses, markdown fences, SSE streaming.
+Drop-in replacement requests.post get_ai_signal.
 """
 import requests
 import json
@@ -12,12 +12,54 @@ from typing import Optional, Dict, Any, Tuple
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
+# SSE Streaming Response Handler
+# ──────────────────────────────────────────────────────────────────────
+
+def parse_sse_response(raw_text: str) -> str:
+    """
+    Parse Server-Sent Events (SSE) streaming response.
+    Extracts content from 'data: ' lines, handles [DONE] marker.
+    Returns combined text content.
+    """
+    if not raw_text:
+        return ""
+    
+    lines = raw_text.strip().split('\n')
+    content_parts = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('data: '):
+            data = line[6:]  # Remove 'data: ' prefix
+            if data == '[DONE]':
+                break
+            try:
+                parsed = json.loads(data)
+                # OpenAI-compatible streaming format
+                delta = parsed.get('choices', [{}])[0].get('delta', {})
+                if 'content' in delta and delta['content']:
+                    content_parts.append(delta['content'])
+                # Some APIs use 'text' instead of 'delta.content'
+                elif 'text' in parsed.get('choices', [{}])[0]:
+                    text_val = parsed['choices'][0]['text']
+                    if text_val:
+                        content_parts.append(text_val)
+            except json.JSONDecodeError:
+                # Non-JSON data line, skip
+                continue
+    
+    return ''.join(content_parts)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # JSON Extraction (handles markdown fences, chain-of-thought, garbage)
 # ──────────────────────────────────────────────────────────────────────
 
 def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     """
-    Extract valid JSON from messy AI responses.
+    Extract valid JSON from messy responses.
     Priority:
     1. Last valid {...} block (model echoes example first, real answer last)
     2. Markdown fenced ```json ... ```
@@ -92,7 +134,7 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Robust POST with retry, 502 handling, JSON extraction
+# Robust POST with retry, 502 handling, JSON extraction, SSE parsing
 # ──────────────────────────────────────────────────────────────────────
 
 def robust_post(
@@ -107,7 +149,9 @@ def robust_post(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Robust POST request with:
+    - Explicit "stream": False in payload
     - Exponential backoff retry on 5xx, timeout, connection errors
+    - SSE streaming response parsing
     - JSON extraction from messy responses (markdown, chain-of-thought)
     - Returns (parsed_json_dict, raw_content) or (None, error_message)
     
@@ -119,6 +163,10 @@ def robust_post(
             # failed, error has reason
     """
     last_error = None
+    
+    # Ensure stream: False is in payload
+    if "stream" not in json_payload:
+        json_payload["stream"] = False
     
     for attempt in range(max_retries):
         try:
@@ -163,7 +211,21 @@ def robust_post(
                     continue
                 return None, last_error
             
-            # Try standard JSON first
+            # Check if response is SSE streaming format
+            is_sse = raw_content.startswith('data: ') or '\ndata: ' in raw_content
+            
+            if is_sse:
+                # Parse SSE streaming response
+                combined_content = parse_sse_response(raw_content)
+                if combined_content:
+                    extracted = extract_json_from_text(combined_content)
+                    if extracted:
+                        return extracted, combined_content
+                    last_error = f"JSON extraction failed from SSE content: {combined_content[:200]}"
+                else:
+                    last_error = "SSE parsing yielded empty content"
+            
+            # Try standard JSON first (non-streaming or fallback)
             try:
                 data = response.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
@@ -176,10 +238,11 @@ def robust_post(
                     last_error = "Empty content in response"
             except json.JSONDecodeError:
                 # Response itself is not JSON (e.g., HTML error page)
-                extracted = extract_json_from_text(raw_content)
-                if extracted:
-                    return extracted, raw_content
-                last_error = f"Response not JSON and extraction failed: {raw_content[:200]}"
+                if not is_sse:  # Already tried SSE parsing above
+                    extracted = extract_json_from_text(raw_content)
+                    if extracted:
+                        return extracted, raw_content
+                    last_error = f"Response not JSON and extraction failed: {raw_content[:200]}"
             
             # If extraction failed, maybe retry (model might be flaky)
             if attempt < max_retries - 1:
@@ -187,7 +250,7 @@ def robust_post(
                 logger.warning(f"[HTTP] Extraction failed, retrying in {delay:.1f}s: {last_error}")
                 time.sleep(delay)
                 continue
-                
+            
             return None, last_error
             
         except requests.exceptions.Timeout:
@@ -242,8 +305,13 @@ def call_ai_signal(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Drop-in for the requests.post call in get_ai_signal.
+    Ensures "stream": False is set.
     Returns (signal_dict, raw_content) or (None, error).
     """
+    # Ensure stream: False
+    payload = dict(payload)
+    payload["stream"] = False
+    
     return robust_post(
         url=url,
         json_payload=payload,
@@ -263,12 +331,21 @@ def call_ai_signal(
 if __name__ == "__main__":
     import sys
     
+    # Test parse_sse_response
+    print("Testing parse_sse_response...")
+    sse_test = """data: {"choices":[{"delta":{"content":"Hello"}}]}
+data: {"choices":[{"delta":{"content":" world"}}]}
+data: [DONE]"""
+    result = parse_sse_response(sse_test)
+    print(f"  SSE parse: {result!r}")
+    assert result == "Hello world", f"Expected 'Hello world', got {result!r}"
+    
     # Test extract_json_from_text
     test_cases = [
         # Markdown fence
         ('```json\n{"action":"BUY","asset":"XRPUSDT","confidence":"75%"}\n```',
          {"action": "BUY", "asset": "XRPUSDT", "confidence": "75%"}),
-        # Prose with JSON
+        # Prose JSON
         ('Berikut sinyal: {"action":"SELL","asset":"DOGEUSD","entry_zone":0.15} semoga membantu',
          {"action": "SELL", "asset": "DOGEUSD", "entry_zone": 0.15}),
         # Echo then real answer (last wins)
@@ -279,12 +356,12 @@ if __name__ == "__main__":
          {"action": "BUY", "asset": "MUBUSDT", "confidence": "80%", "entry_zone": 0.5}),
         # Non-JSON text
         ("maaf saya tidak bisa membantu", None),
-        # Truncated JSON - parser extracts partial (useful behavior)
+        # Truncated JSON parser extracts partial (useful behavior)
         ('{"action":"BUY","asset":"BTCUSDT"',
          {"action": "BUY", "asset": "BTCUSDT"}),
     ]
     
-    print("Testing extract_json_from_text...")
+    print("\nTesting extract_json_from_text...")
     for i, (input_text, expected) in enumerate(test_cases):
         result = extract_json_from_text(input_text)
         status = "PASS" if result == expected else "FAIL"
