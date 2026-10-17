@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Model H</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100vw;height:100vh;overflow:hidden;background:#0e1117;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;touch-action:manipulation}
+.bar{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:#161b22;border-bottom:1px solid #21262d;font-size:12px;flex-shrink:0}
+.bl,.br{display:flex;align-items:center;gap:12px}
+.chip{display:flex;align-items:center;gap:4px;color:#8b949e}
+.chip b{color:#c9d1d9;font-weight:600}
+.chip b.g{color:#3fb950}
+.chip b.r{color:#f85149}
+.p{width:7px;height:7px;border-radius:50%;background:#3fb950;display:inline-block}
+.p.r{background:#f85149;animation:blink .8s infinite}
+.p.off{background:#484f58}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.bat{display:flex;align-items:center;gap:3px}
+.bat-b{width:20px;height:10px;border:1.5px solid #484f58;border-radius:2px;position:relative;display:flex;align-items:center;padding:1.5px}
+.bat-b::after{content:'';position:absolute;right:-4px;top:2px;width:3px;height:5px;background:#484f58;border-radius:0 1px 1px 0}
+.bat-f{height:100%;background:#3fb950;border-radius:1px}
+.bat-f.low{background:#f0883e}
+.rssi{display:flex;align-items:flex-end;gap:2px;height:10px}
+.rssi s{width:3px;background:#3fb950;border-radius:1px;display:block}
+.rssi s.x{background:#484f58}
+.rssi s:nth-child(1){height:3px}.rssi s:nth-child(2){height:5px}.rssi s:nth-child(3){height:8px}.rssi s:nth-child(4){height:10px}
+.banner{background:#da3634;color:#fff;text-align:center;padding:5px;font-size:11px;font-weight:600;display:none;flex-shrink:0}
+.banner.show{display:block}
+.main{flex:1;display:flex;min-height:0}
+.ctrl{width:30%;display:flex;align-items:center;justify-content:center;padding:10px;flex-shrink:0}
+.dpad{display:grid;grid-template-columns:70px 70px 70px;grid-template-rows:70px 70px 70px;gap:5px}
+.d{border:none;border-radius:10px;font-size:22px;color:#58a6ff;background:#1f2937;border:2px solid #30363d;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;outline:none}
+.d.on{background:#1f6feb;color:#fff;border-color:#1f6feb}
+.d.stop{font-size:12px;font-weight:700;color:#8b949e;letter-spacing:.05em}
+.d.stop.on{background:#21262d;color:#8b949e;border-color:#30363d}
+.e{visibility:hidden}
+.tel{flex:1;display:flex;flex-direction:column;gap:8px;padding:10px 12px;min-width:0}
+.state{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px;border-radius:8px;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.state.idle{background:#161b22;color:#8b949e;border:1px solid #21262d}
+.state.go{background:#1f6feb22;color:#58a6ff;border:1px solid #1f6feb44}
+.state.emg{background:#da363422;color:#f85149;border:1px solid #f8514944;animation:blink .6s infinite}
+.state.off{background:#da363422;color:#f85149;border:1px solid #f8514944}
+.meter{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 10px}
+.meter h4{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#484f58;margin-bottom:6px}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.row:last-child{margin-bottom:0}
+.row label{font-size:11px;color:#8b949e;width:36px;flex-shrink:0}
+.track{flex:1;height:6px;background:#21262d;border-radius:3px;overflow:hidden;position:relative}
+.fill{height:100%;border-radius:3px;transition:width .1s}
+.fill.l{background:#58a6ff}
+.fill.r{background:#f0883e}
+.fill.rev{background:#f85149}
+.row .num{font-size:11px;font-weight:600;width:42px;text-align:right;color:#c9d1d9;flex-shrink:0}
+.meta{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:6px 10px;display:flex;flex-direction:column;gap:4px}
+.meta div{display:flex;justify-content:space-between;font-size:11px;color:#484f58}
+.meta div b{color:#8b949e;font-weight:600}
+.side{width:24%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:10px;flex-shrink:0}
+.estop{width:76px;height:76px;border-radius:50%;border:2.5px solid #f85149;background:#211a1a;color:#f85149;font-family:inherit;font-size:10px;font-weight:700;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;-webkit-tap-highlight-color:transparent;outline:none}
+.estop.on{background:#da3634;color:#fff;animation:blink .5s infinite}
+.estop .ic{font-size:18px}
+.unlock{padding:5px 12px;border:1px solid #21262d;border-radius:5px;background:#161b22;color:#484f58;font-size:10px;font-weight:600;cursor:pointer;text-transform:uppercase;letter-spacing:.06em;display:none;-webkit-tap-highlight-color:transparent;outline:none}
+.unlock.show{display:block}
+.unlock:active{background:#21262d}
+.speed-row{display:flex;gap:5px;width:100%}
+.sp{flex:1;padding:7px 0;border:1.5px solid #21262d;border-radius:6px;background:#161b22;color:#484f58;font-size:13px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;outline:none}
+.sp.on{border-color:#58a6ff;color:#58a6ff;background:#1f6feb22}
+.lock-overlay{position:fixed;inset:0;background:#0e1117cc;display:none;align-items:center;justify-content:center;z-index:100}
+.lock-overlay.show{display:flex}
+.lock-box{text-align:center;color:#f85149;font-size:14px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;line-height:1.8}
+@media(orientation:portrait){.main{flex-direction:column}.ctrl,.side{width:100%}.ctrl{height:40%}.side{flex-direction:row;flex-wrap:wrap;justify-content:center}.dpad{grid-template-columns:60px 60px 60px;grid-template-rows:60px 60px 60px}}
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="bl">
+    <div class="chip"><span class="p" id="cd"></span><span id="cl">CONNECTED</span></div>
+    <div class="chip">STATE <b id="sl">READY</b></div>
+  </div>
+  <div class="br">
+    <div class="chip">
+      <div class="bat"><div class="bat-b"><div class="bat-f" id="bf" style="width:85%"></div></div><span id="bp" style="font-size:11px;color:#c9d1d9">85%</span></div>
+    </div>
+    <div class="chip"><span id="bv" style="font-size:11px;color:#c9d1d9">12.6V</span></div>
+    <div class="chip">
+      <div class="rssi" id="wb"><s></s><s></s><s></s><s class="x"></s></div>
+      <span id="wr" style="font-size:11px;color:#8b949e">-58</span>
+    </div>
+    <div class="chip">SOLAR <b id="sw" class="g">CHG</b></div>
+  </div>
+</div>
+<div class="banner" id="ban">CONNECTION LOST - MOTOR STOPPED</div>
+<div class="main">
+  <div class="ctrl">
+    <div class="dpad">
+      <div class="e"></div>
+      <button class="d" id="bF">&#9650;</button>
+      <div class="e"></div>
+      <button class="d" id="bL">&#9664;</button>
+      <button class="d stop" id="bS">STOP</button>
+      <button class="d" id="bR">&#9654;</button>
+      <div class="e"></div>
+      <button class="d" id="bB">&#9660;</button>
+      <div class="e"></div>
+    </div>
+  </div>
+  <div class="tel">
+    <div class="state idle" id="sbox"><span class="p g" id="sd"></span><span id="st">READY</span></div>
+    <div class="meter">
+      <h4>MOTOR OUTPUT</h4>
+      <div class="row">
+        <label>LEFT</label>
+        <div class="track"><div class="fill l" id="ml" style="width:50%;margin-left:50%"></div></div>
+        <span class="num" id="mlv">0%</span>
+      </div>
+      <div class="row">
+        <label>RIGHT</label>
+        <div class="track"><div class="fill r" id="mr" style="width:50%;margin-left:50%"></div></div>
+        <span class="num" id="mrv">0%</span>
+      </div>
+    </div>
+    <div class="meta">
+      <div><span>Runtime</span><b id="rt">00:00:00</b></div>
+      <div><span>Last Cmd</span><b id="lc">-</b></div>
+      <div><span>Speed</span><b id="sv">50%</b></div>
+    </div>
+  </div>
+  <div class="side">
+    <button class="estop" id="es"><span class="ic">&#9888;</span>E-STOP</button>
+    <button class="unlock" id="ur">UNLOCK</button>
+    <div class="speed-row">
+      <button class="sp" data-s="25">25</button>
+      <button class="sp on" data-s="50">50</button>
+      <button class="sp" data-s="75">75</button>
+      <button class="sp" data-s="100">100</button>
+    </div>
+  </div>
+</div>
+<div class="lock-overlay" id="lov">
+  <div class="lock-box">EMERGENCY<br>LOCKED</div>
+</div>
+<script>
+(function(){
+  var connected=true, emg=false, speed=50, dir=null, t0=Date.now();
+  function updateMotors(){
+    var sp=speed/100, mL=0, mR=0;
+    if(dir==='F'){mL=sp;mR=sp;}
+    else if(dir==='B'){mL=-sp;mR=-sp;}
+    else if(dir==='L'){mL=-sp*.5;mR=sp*.5;}
+    else if(dir==='R'){mL=sp*.5;mR=-sp*.5;}
+    var aL=Math.abs(mL*100), aR=Math.abs(mR*100);
+    document.getElementById('mlv').textContent=(mL>=0?'+':'-')+aL.toFixed(0)+'%';
+    document.getElementById('mrv').textContent=(mR>=0?'+':'-')+aR.toFixed(0)+'%';
+    var lPct=50+mL*50, rPct=50+mR*50;
+    document.getElementById('ml').style.marginLeft=(50-lPct/2)+'%';
+    document.getElementById('ml').style.width=Math.abs(lPct-50)*2+'%';
+    document.getElementById('mr').style.marginLeft=(50-rPct/2)+'%';
+    document.getElementById('mr').style.width=Math.abs(rPct-50)*2+'%';
+    document.getElementById('ml').className='fill l'+(mL<0?' rev':'');
+    document.getElementById('mr').className='fill r'+(mR<0?' rev':'');
+  }
+  function setState(){
+    var st=emg?'emg':!connected?'off':dir?'go':'idle';
+    var box=document.getElementById('sbox');
+    box.className='state '+st;
+    var lbl={idle:'READY',go:'MOVING',emg:'E-STOP',off:'OFFLINE'};
+    document.getElementById('st').textContent=lbl[st];
+    document.getElementById('sl').textContent=lbl[st];
+    document.getElementById('sl').className=st==='go'?'g':(st==='emg'||st==='off')?'r':'';
+    document.getElementById('sd').className='p '+(st==='idle'?'off':(st==='emg'||st==='off')?'r':'g');
+    document.getElementById('cd').className='p '+(connected?'g':'r');
+    document.getElementById('cl').textContent=connected?'CONNECTED':'DISCONNECTED';
+    document.getElementById('ban').className='banner'+((!connected&&!emg)?' show':'');
+  }
+  function setDir(d){
+    if(!connected||emg) return;
+    dir=d;
+    document.getElementById('lc').textContent=d||'STOP';
+    updateMotors();
+    setState();
+  }
+  var dirs=['F','B','L','R'];
+  dirs.forEach(function(k){
+    var btn=document.getElementById('b'+k);
+    btn.addEventListener('pointerdown',function(e){
+      e.preventDefault();
+      setDir(k);
+      btn.classList.add('on');
+    });
+    btn.addEventListener('pointerup',function(e){
+      e.preventDefault();
+      btn.classList.remove('on');
+    });
+    btn.addEventListener('pointerleave',function(e){
+      btn.classList.remove('on');
+    });
+  });
+  document.getElementById('bS').addEventListener('click',function(){
+    if(!connected||emg) return;
+    dir=null;
+    document.getElementById('lc').textContent='STOP';
+    updateMotors();
+    setState();
+  });
+  document.querySelectorAll('.sp').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      document.querySelectorAll('.sp').forEach(function(b){b.classList.remove('on');});
+      btn.classList.add('on');
+      speed=parseInt(btn.dataset.s);
+      document.getElementById('sv').textContent=speed+'%';
+      updateMotors();
+    });
+  });
+  document.getElementById('es').addEventListener('click',function(){
+    if(emg) return;
+    emg=true; dir=null;
+    this.classList.add('on');
+    document.getElementById('ur').classList.add('show');
+    document.getElementById('lov').classList.add('show');
+    document.querySelectorAll('.d').forEach(function(b){b.style.pointerEvents='none';});
+    updateMotors();
+    setState();
+  });
+  document.getElementById('ur').addEventListener('click',function(){
+    emg=false;
+    document.getElementById('es').classList.remove('on');
+    this.classList.remove('show');
+    document.getElementById('lov').classList.remove('show');
+    document.querySelectorAll('.d').forEach(function(b){b.style.pointerEvents='';});
+    setState();
+  });
+  setInterval(function(){
+    var s=Math.floor((Date.now()-t0)/1000);
+    var h=String(Math.floor(s/3600)).padStart(2,'0');
+    var m=String(Math.floor((s%3600)/60)).padStart(2,'0');
+    var sec=String(s%60).padStart(2,'0');
+    document.getElementById('rt').textContent=h+':'+m+':'+sec;
+  },1000);
+  document.addEventListener('keydown',function(e){
+    if(emg||!connected) return;
+    var map={'ArrowUp':'F','ArrowDown':'B','ArrowLeft':'L','ArrowRight':'R','w':'F','s':'B','a':'L','d':'R'};
+    if(map[e.key]){
+      e.preventDefault();
+      setDir(map[e.key]);
+      var btn=document.getElementById('b'+map[e.key]);
+      if(btn) btn.classList.add('on');
+    } else if(e.key===' '){
+      e.preventDefault();
+      dir=null;
+      document.getElementById('lc').textContent='STOP';
+      updateMotors();
+      setState();
+    } else if(e.key==='Escape'){document.getElementById('es').click();}
+  });
+  document.addEventListener('keyup',function(e){
+    var map={'ArrowUp':'F','ArrowDown':'B','ArrowLeft':'L','ArrowRight':'R','w':'F','s':'B','a':'L','d':'R'};
+    if(map[e.key]){
+      var btn=document.getElementById('b'+map[e.key]);
+      if(btn) btn.classList.remove('on');
+    }
+  });
+  updateMotors();
+  setState();
+})();
+</script>
+</body>
+</html>

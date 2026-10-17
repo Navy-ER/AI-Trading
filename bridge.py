@@ -6,12 +6,12 @@ import execution as tko_exec
 from robust_http import call_ai_signal, extract_json_from_text
 
 # Constants
-OMNIROUTER_URL = os.getenv("OMNIROUTER_URL", "http://127.0.0.1:11434")
-AI_MODEL = os.getenv("AI_MODEL", "qwen2.5:1.5b")
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1532938091331977337/EQV4Kt_E6a2jH97EeBEFvuJdcrqcw0Qt_-y5wNyDJYCvReHqwg6cUOG9_lTDwKNRaKli"
-DISCORD_HEALTH_WEBHOOK = os.getenv("DISCORD_HEALTH_WEBHOOK_URL", DISCORD_WEBHOOK_URL)
-DISCORD_WEBHOOK_TRADE_URL = "https://discord.com/api/webhooks/1533282533264064552/BxCca57xNw2vzG-XlUmlUForDY5DeRybLEzkPYoUOMisvS7NbeAS135xR3e9VVT_LIRA"
-DISCORD_USER_ID = "1464229528317464765"
+OMNIROUTER_URL=os.getenv("OMNIROUTER_URL", "http://127.0.0.1:20128/v1")
+AI_MODEL=os.getenv("AI_MODEL", "")
+DISCORD_WEBHOOK_URL=os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_HEALTH_WEBHOOK=os.getenv("DISCORD_HEALTH_WEBHOOK_URL", DISCORD_WEBHOOK_URL)
+DISCORD_WEBHOOK_TRADE_URL=os.getenv("DISCORD_WEBHOOK_TRADE_URL", "")
+DISCORD_USER_ID= os.getenv("DISCORD_USER_ID", "1464229528317464765")
 
 PROBLEM_ASSETS = {"SNDK", "SNDKB", "SOL", "GIGGLE", "UNI", "ADA"}
 
@@ -93,13 +93,13 @@ def circuit_paused():
 
 def record_realised_loss(pnl):
     """Accumulate realised loss hari ini; pause trading kalau lewat limit."""
-    if pnl <= 0:
+    if pnl >= 0:
         return
     st = circuit_state()
     st["realised_loss"] = round(st.get("realised_loss", 0.0) + abs(pnl), 4)
     if not st.get("paused") and st["realised_loss"] > DAILY_LOSS_LIMIT:
         st["paused"] = True
-        log(f"[CIRCUIT] Daily realised loss {st['realised_loss']:.4f} USDT > limit {DAILY_LOSS_LIMIT} USDT — TRADING PAUSED until daily reset")
+        log(f"[CIRCUIT] Daily realised loss {st['realised_loss']:.4f} USDT > limit {DAILY_LOSS_LIMIT} USDT -- TRADING PAUSED until daily reset")
         send_discord_webhook(DISCORD_HEALTH_WEBHOOK, {
             "title": "Circuit Breaker: Trading Paused",
             "color": 0xFF0000,
@@ -135,7 +135,7 @@ def get_atr(symbol, period=14):
         params = {"symbol": symbol, "interval": "15m", "limit": period + 1}
         r = requests.get(url, params=params, timeout=10)
         if r.status_code == 400:
-            log(f"[ATR] {symbol}: HTTP 400 — symbol not listed or delisted")
+            log(f"[ATR] {symbol}: HTTP 400 -- symbol not listed or delisted")
             return False
         r.raise_for_status()
         klines = r.json()
@@ -282,6 +282,7 @@ def get_batch_rsi(assets):
     return result
 
 def get_market_data():
+    """Fetch top 20 USDT pairs by volume with full price data."""
     try:
         url = "https://data-api.binance.vision/api/v3/ticker/24hr"
         r = requests.get(url, timeout=10)
@@ -329,12 +330,13 @@ def get_batch_adx(assets):
     return result
 
 def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excluded_assets=None):
+    """Get AI trading signal. market_data must have up to 20 coins with full data."""
     try:
         rsi_data = rsi_data or {}
         adx_data = adx_data or {}
 
-        # Limit to max 5 top coins (by volume) for ultra-short prompt
-        top_coins = list(market_data.items())[:5]
+        # Use up to 20 coins from market data for comprehensive prompt
+        top_coins = list(market_data.items())[:20]
 
         lines = []
         for coin, data in top_coins:
@@ -342,7 +344,7 @@ def get_ai_signal(market_data, rsi_data=None, adx_data=None, last_asset="", excl
             vol = data.get('volume_24h', 0) / 1e6
             rsi = rsi_data.get(coin)
             adx = adx_data.get(coin)
-            # Ultra-short format: XRP:1.42 Chg=+1.4% Vol=243M RSI=24.7 ADX=22
+            # Format: XRP:1.42 Chg=+1.4% Vol=243M RSI=24.7 ADX=22
             parts = [f"{coin}:{data['price']:.4g}"]
             parts.append(f"Chg={change:+.1f}%")
             parts.append(f"Vol={vol:.0f}M")
@@ -364,7 +366,7 @@ HANYA koin yang ada list bawah ini yang valid.
 {excluded_line}{market_text}
 Balas HANYA dengan JSON murni tanpa markdown: {{"coin":"SYMBOL", "action":"BUY/SELL", "confidence":80, "reason":"alasan singkat"}}"""
 
-        url = OMNIROUTER_URL
+        url=OMNIROUTER_URL + "/chat/completions"
         omni_api_key = os.getenv("OMNIROUTER_API_KEY", "")
 
         for attempt in range(3):
@@ -432,7 +434,7 @@ Balas HANYA dengan JSON murni tanpa markdown: {{"coin":"SYMBOL", "action":"BUY/S
         return None
 
 def _normalize_base(asset):
-    """MUB-USDT / DOGEUSD / bnb123 / SOLX1024 -> MUB / DOGE / BNB / SOLX. Return "" if not viable."""
+    """MUB-USDT / DOGEUSD / bnb123 / SOLX1024 -> MUB / DOGE / BNB / SOLX. Return '' if not viable."""
     a = "".join(c for c in str(asset).upper() if c.isalnum())
     for suffix in ("USDT", "USD"):
         if a.endswith(suffix) and len(a) > len(suffix):
@@ -823,7 +825,7 @@ def add_position(signal, price, size_usdt=None):
     # ATR API error (HTTP 400/symbol not found) - skip position, TP/SL risky
     atr = get_atr(signal["asset"])
     if atr is False:
-        log(f"[POS] Skipped {signal['asset']} — ATR API error (symbol not listed or delisted)")
+        log(f"[POS] Skipped {signal['asset']} -- ATR API error (symbol not listed or delisted)")
         return None
 
     if atr:
@@ -1067,7 +1069,7 @@ def main_loop():
     market_data = get_market_data()
     if not market_data:
         log("[BRIDGE] No market data, skip")
-        alert_down("No market data — bridge down?")
+        alert_down("No market data -- bridge down?")
         return
     _down_alerted = False
 
@@ -1089,7 +1091,7 @@ def main_loop():
 
     # Circuit breaker
     if circuit_paused():
-        log("[CIRCUIT] Daily loss limit reached — trading paused until daily reset")
+        log("[CIRCUIT] Daily loss limit reached -- trading paused until daily reset")
         return
 
     # Log positions summary every 5 cycles
@@ -1162,7 +1164,7 @@ def main_loop():
             return
         asset = signal["asset"]
 
-    # Retry loop picked different asset - recompute base/price/adx
+    # Retry loop picked different asset -- recompute base/price/adx
     base = asset.replace("USDT", "")
     signal["adx"] = adx_indicators.get(base)
     price = prices.get(base)
