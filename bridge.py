@@ -2083,7 +2083,11 @@ def _main_loop():
         log(f"[PRE] Buang {len(drop)} kandidat: " + ", ".join(f"{b}={r}" for b, r in list(drop.items())[:12]))
     market_data = {b: d for b, d in market_data.items() if b not in drop}
     if len(market_data) < 3:
-        log(f"[PRE] Cuma {len(market_data)} kandidat layak, skip cycle")
+        _reject_streak += 1
+        log(f"[PRE] Cuma {len(market_data)} kandidat layak, skip cycle (streak {_reject_streak}/{REJECT_ALERT_STREAK})")
+        if _reject_streak >= REJECT_ALERT_STREAK:
+            alert_reject_streak(_reject_streak)
+            _reject_streak = 0
         return
 
     # Signal retry: kalau kandidat ditolak (filter ADX/RSI, posisi sudah terbuka,
