@@ -1,3 +1,6 @@
+# CATATAN: produksi sekarang jalan di acerver (systemd di 192.168.18.188),
+# BUKAN di Render. autoDeploy sengaja dimatikan supaya push ke GitHub tidak
+# menyalakan bot kedua dengan state/posisi terpisah.
 services:
   - type: worker
     name: bridge-trading-bot
@@ -6,7 +9,7 @@ services:
     startCommand: "python bridge.py"
     envVars:
       - key: OMNIROUTER_URL
-        value: "https://openrouter.ai/api/v1/chat/completions"
+        value: "https://openrouter.ai/api/v1"
         sync: false
       - key: OMNIROUTER_API_KEY
         sync: false
@@ -52,4 +55,4 @@ services:
         sync: false
       - key: TOKOCRYPTO_SECRET_KEY
         sync: false
-    autoDeploy: true
+    autoDeploy: false

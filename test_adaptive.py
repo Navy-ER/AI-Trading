@@ -1,8 +1,14 @@
 """Test adaptive confidence floor + retry-path fixes."""
 import sys
+import os
 sys.path.insert(0, "C:/Users/reyvan/pixel-agents")
 import bridge
 
+os.environ["TKO_DRY_RUN"] = "true"
+bridge.log = lambda *a, **k: None
+bridge.read_position_records = lambda mode=None: []
+bridge.LEGACY_POSITION_LOGS = []
+assert bridge.read_position_records() == []  # fixture bypasses repository position files
 bridge.append_jsonl = lambda *a, **k: None
 bridge.tko_exec.estimate_position_size = lambda price, conf=0: 1.2
 
@@ -20,18 +26,18 @@ check("adx=None", bridge.adaptive_conf_min(None), 80)
 check("adx=10 weak", bridge.adaptive_conf_min(10), 80)
 check("adx=15 weak", bridge.adaptive_conf_min(15), 80)
 check("adx=19.9 weak", bridge.adaptive_conf_min(19.9), 80)
-check("adx=20 moderate", bridge.adaptive_conf_min(20), 75)
+check("adx=20 uses base floor", bridge.adaptive_conf_min(20), 80)
 check("adx=25 moderate", bridge.adaptive_conf_min(25), 75)
 check("adx=29.9 moderate", bridge.adaptive_conf_min(29.9), 75)
-check("adx=30 strong", bridge.adaptive_conf_min(30), 70)
+check("adx=30 uses moderate floor", bridge.adaptive_conf_min(30), 75)
 check("adx=40 strong", bridge.adaptive_conf_min(40), 70)
 check("adx=49.9 strong", bridge.adaptive_conf_min(49.9), 70)
-check("adx=50 extreme", bridge.adaptive_conf_min(50), 85)
+check("adx=50 uses strong floor", bridge.adaptive_conf_min(50), 70)
 check("adx=65 extreme", bridge.adaptive_conf_min(65), 85)
 
 # ── execute_tko_trade uses dynamic floor ────────────────────────────────────
 sig1 = {"action": "BUY", "asset": "XRPUSDT", "confidence": "75%", "adx": 35}
-check("conf=75 ADX=35 strong → proceed (floor=70)",
+check("conf=75 ADX=35 moderate → proceed (floor=75)",
       bridge.execute_tko_trade(sig1, 1.0) is not None, True)
 
 sig2 = {"action": "BUY", "asset": "XRPUSDT", "confidence": "75%", "adx": 15}

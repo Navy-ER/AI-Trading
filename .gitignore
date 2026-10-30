@@ -58,6 +58,7 @@ __pycache__/
 *.bak
 *.bak.*
 *.old
+bridge.lock
 monitor_state.json
 nul
 

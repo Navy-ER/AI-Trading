@@ -7,20 +7,27 @@ import json, os, subprocess, sys
 from datetime import datetime, timezone
 
 import requests  # same dep as bridge.py
+from execution import trading_mode
 
-BASE = r"C:\Users\reyvan\pixel-agents"
+BASE = os.path.dirname(os.path.abspath(__file__))
 TRADES = os.path.join(BASE, "trades.jsonl")
-OPENS = os.path.join(BASE, "open_positions.jsonl")
+OPENS = {
+    "DRY_RUN": os.path.join(BASE, "open_positions.dry_run.jsonl"),
+    "LIVE": os.path.join(BASE, "open_positions.live.jsonl"),
+}
 STATE = os.path.join(BASE, "monitor_state.json")
-LOG = r"E:\Project AI\monitoring.log"
-PYTHON = r"C:\Users\reyvan\AppData\Local\Python\pythoncore-3.14-64\python.exe"  # same as monitor_cron.sh
+LOG = os.path.join(BASE, "monitoring.log")
+PYTHON = sys.executable
 BRIDGE_PY = os.path.join(BASE, "bridge.py")
-WEBHOOK_URL = "https://discord.com/api/webhooks/1533282533264064552/BxCca57xNw2vzG-XlUmlUForDY5DeRybLEzkPYoUOMisvS7NbeAS135xR3e9VVT_LIRA"
+WEBHOOK_URL = os.getenv("DISCORD_MONITOR_WEBHOOK_URL", "")
 
 GREEN, BLUE, RED = 0x2ECC71, 0x3498DB, 0xE74C3C
 
 
 def send_embed(embed):
+    if not WEBHOOK_URL:
+        print("[DISCORD] monitor webhook is not configured")
+        return False
     try:
         r = requests.post(WEBHOOK_URL, json={"embeds": [embed]}, timeout=10)
         ok = r.status_code in (200, 204)
@@ -56,7 +63,7 @@ def bridge_alive():
 
 
 def restart_bridge():
-    """Start bridge.py detached (positions persist in open_positions.jsonl)."""
+    """Start bridge.py detached; position records are stored by trading mode."""
     try:
         flags = 0
         if os.name == "nt":
@@ -101,11 +108,17 @@ def open_info():
     n = 0
     fsum = 0.0
     entries = []
-    for line in open(OPENS, encoding="utf-8"):
+    mode = trading_mode()
+    path = OPENS.get(mode)
+    if path is None or not os.path.exists(path):
+        return n, fsum, entries
+    for line in open(path, encoding="utf-8"):
         line = line.strip()
         if not line:
             continue
         t = json.loads(line)
+        if not isinstance(t, dict) or t.get("mode") != mode:
+            continue
         n += 1
         fsum += t.get("floating_pnl", 0.0)
         entries.append((t["asset"], t.get("floating_pct", 0.0)))
@@ -158,7 +171,7 @@ def main():
     elif alive:
         msgs.append("bridge: RUNNING")
     else:
-        # P1: bridge DOWN -> auto-restart (positions persist in open_positions.jsonl)
+        # P1: bridge DOWN -> auto-restart (positions persist by trading mode)
         pid = restart_bridge()
         if pid:
             alive = True
@@ -166,7 +179,7 @@ def main():
             send_embed(make_embed("🔄 Bridge DOWN → Auto-Restarted", RED,
                                   [{"name": "PID", "value": str(pid), "inline": True},
                                    {"name": "Open", "value": "%d pos (float %+.4f)" % (n, fsum), "inline": True}],
-                                  "bridge.py di-restart otomatis. Posisi persist di open_positions.jsonl."))
+                                  "bridge.py di-restart otomatis. Posisi tersimpan terpisah menurut mode."))
         else:
             msgs.append("bridge: DOWN!! (restart gagal)")
     msgs.append("%d closed %dW/%dL %.1f%% net %+.4f USDT" % (total, w, l, wr, net))

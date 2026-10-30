@@ -3,11 +3,14 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge
 
-bridge.TKO_DRY_RUN = True
+os.environ["TKO_DRY_RUN"] = "true"
 bridge.TKO_CONFIDENCE_MIN = 80
 bridge.log = lambda *a, **k: None
+bridge.read_position_records = lambda mode=None: []
+bridge.LEGACY_POSITION_LOGS = []
 logged = []
 bridge.append_jsonl = lambda path, obj: logged.append(obj)
+assert bridge.read_position_records() == []  # fixture bypasses every repository position path
 
 F = []
 def check(name, got, want):
@@ -27,7 +30,10 @@ check("conf rendah skip", run({"action": "BUY", "asset": "BTCUSDT", "confidence"
 check("conf rendah tak di-log", len(logged) == n0, True)
 
 # T3: confidence >= min + dry-run -> dict dry_run True
-check("dry-run lolos", run({"action": "BUY", "asset": "BTCUSDT", "confidence": "90%"}), {"action": "BUY", "dry_run": True})
+dry_result = run({"action": "BUY", "asset": "BTCUSDT", "confidence": "90%"})
+check("dry-run lolos", dry_result.get("dry_run"), True)
+check("dry-run source isolated", dry_result.get("source"), "DRY_RUN_SIMULATOR")
+check("dry-run is not exchange fill", dry_result.get("classification"), "SIMULATED_FILL")
 
 # T4: dry-run nulis trades.jsonl (status DRY_RUN)
 check("trades di-log", logged[-1]["status"], "DRY_RUN")
@@ -38,7 +44,10 @@ check("conf non-angka skip", run({"action": "SELL", "asset": "BTCUSDT", "confide
 check("conf non-angka tak di-log", len(logged) == n1, True)
 
 # T6: Max Position Guard - 1 posisi per aset
-bridge.read_jsonl = lambda path: [{"asset": "ADAUSDT"}, {"asset": "SOLUSDT"}]
+bridge.read_position_records = lambda mode=None: [
+    {"mode": "DRY_RUN", "asset": "ADAUSDT"},
+    {"mode": "DRY_RUN", "asset": "SOLUSDT"},
+]
 check("guard: aset dgn posisi aktif", bridge.has_open_position("ADAUSDT"), True)
 check("guard: aset tanpa posisi", bridge.has_open_position("BTCUSDT"), False)
 

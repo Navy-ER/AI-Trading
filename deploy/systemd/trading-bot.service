@@ -1,0 +1,19 @@
+[Unit]
+Description=Acerver AI Trading Bot (bridge.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/server/trading-bot
+Environment="TZ=Asia/Jakarta"
+EnvironmentFile=/home/server/trading-bot/.env
+ExecStart=/usr/bin/python3 /home/server/trading-bot/bridge.py
+Restart=always
+RestartSec=10
+# Kode 75 = instance lock sudah dipegang proses lain (bridge.py acquire_instance_lock).
+# Jangan restart-loop; biarkan instance yang sudah jalan yang pegang kendali.
+RestartPreventExitStatus=75
+
+[Install]
+WantedBy=default.target

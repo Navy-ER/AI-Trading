@@ -11,6 +11,27 @@ from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _retry_after_seconds(value: Optional[str], default: float = 30.0) -> float:
+    """Parse a Retry-After header (seconds or HTTP-date) into seconds."""
+    if not value:
+        return default
+    value = value.strip()
+    try:
+        return max(1.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        dt = parsedate_to_datetime(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(1.0, (dt - datetime.now(dt.tzinfo)).total_seconds())
+    except Exception:
+        return default
+
+
 # ──────────────────────────────────────────────────────────────────────
 # SSE Streaming Response Handler
 # ──────────────────────────────────────────────────────────────────────
@@ -229,20 +250,30 @@ def robust_post(
             # ──────────────────────────────────────────────────────────
             # Handle HTTP errors (502, 503, 504, etc.)
             # ──────────────────────────────────────────────────────────
-            if response.status_code >= 500:
+            if response.status_code != 200:
                 last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-                logger.warning(f"[HTTP] Server error {response.status_code} on attempt {attempt + 1}")
-                
-                # Don't retry on 4xx (client errors) - only 5xx
-                if response.status_code < 500:
-                    return None, f"Client error {response.status_code}: {response.text[:200]}"
-                
-                # Retry with backoff
-                if attempt < max_retries - 1:
-                    delay = min(base_delay * (backoff_factor ** attempt), max_delay)
-                    logger.info(f"[HTTP] Retrying in {delay:.1f}s...")
-                    time.sleep(delay)
-                    continue
+                if response.status_code == 429:
+                    retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+                    last_error = (
+                        f"HTTP 429 rate limited | retry_after={retry_after:.0f}s | "
+                        f"{response.text[:160]}"
+                    )
+                    logger.warning(
+                        f"[HTTP] Rate limited (429) on attempt {attempt + 1}, "
+                        f"Retry-After={retry_after:.0f}s"
+                    )
+                    # Return immediately; the multi-key layer puts this key on
+                    # cooldown until retry_after instead of hammering the provider.
+                    return None, last_error
+                if response.status_code >= 500:
+                    logger.warning(f"[HTTP] Server error {response.status_code} on attempt {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        delay = min(base_delay * (backoff_factor ** attempt), max_delay)
+                        logger.info(f"[HTTP] Retrying in {delay:.1f}s...")
+                        time.sleep(delay)
+                        continue
+                else:
+                    logger.warning(f"[HTTP] Client error {response.status_code}: {response.text[:120]}")
                 return None, last_error
             
             # ──────────────────────────────────────────────────────────
@@ -276,7 +307,10 @@ def robust_post(
             # Try standard JSON first (non-streaming or fallback)
             try:
                 data = response.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                msg = data.get("choices", [{}])[0].get("message", {})
+                content = (msg.get("content") or "").strip()
+                if not content and "reasoning" in msg:
+                    content = (msg.get("reasoning") or "").strip()
                 if content:
                     extracted = extract_json_from_text(content)
                     if extracted:

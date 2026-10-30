@@ -1,0 +1,15 @@
+[Unit]
+Description=Acerver Trading Dashboard (port 5000)
+After=network-online.target trading-bot.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/server/trading-bot
+Environment="TZ=Asia/Jakarta"
+EnvironmentFile=/home/server/trading-bot/.env
+ExecStart=/usr/bin/python3 /home/server/trading-bot/dashboard_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
